@@ -30,15 +30,21 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Install dependencies
-      run: go mod download
+    - name: Install dependencies and generate code
+      run: |
+        go mod download
+        # Install ent code generator if needed
+        go install entgo.io/ent/cmd/ent@latest
+        # Generate ent code (if not already generated)
+        go generate ./...
 
     - name: Run tests
       run: go test ./...
 
     - name: Build application
       run: |
-        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o ${{ env.APP_NAME }} ./cmd/web
+        # Build with all dependencies embedded
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -tags production -ldflags="-s -w" -o ${{ env.APP_NAME }} ./cmd/web
         chmod +x ${{ env.APP_NAME }}
 
     - name: Create deployment package
@@ -65,6 +71,7 @@ jobs:
         Environment=PAGODA_APP_ENVIRONMENT=production
         Environment=PAGODA_HTTP_PORT=8000
         Environment=PAGODA_APP_HOST=${{ secrets.APP_HOST }}
+        Environment=PAGODA_ORM_AUTO_MIGRATE=false
 
         [Install]
         WantedBy=multi-user.target
