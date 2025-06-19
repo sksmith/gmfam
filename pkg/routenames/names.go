@@ -6,6 +6,7 @@ import (
 
 const (
 	Home                 = "home"
+	Health               = "health"
 	About                = "about"
 	Contact              = "contact"
 	ContactSubmit        = "contact.submit"

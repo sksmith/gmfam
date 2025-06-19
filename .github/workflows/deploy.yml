@@ -1,0 +1,154 @@
+name: Deploy to AWS Lightsail
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.21"
+  APP_NAME: "gmfam"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test ./...
+
+    - name: Build application
+      run: |
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o ${{ env.APP_NAME }} ./cmd/web
+        chmod +x ${{ env.APP_NAME }}
+
+    - name: Create deployment package
+      run: |
+        mkdir -p deploy
+        cp ${{ env.APP_NAME }} deploy/
+        cp -r public deploy/ 2>/dev/null || true
+        cp -r static deploy/ 2>/dev/null || true
+        cp config/config.yaml deploy/ 2>/dev/null || true
+        
+        # Create systemd service file
+        cat > deploy/${{ env.APP_NAME }}.service << EOF
+        [Unit]
+        Description=${{ env.APP_NAME }} web application
+        After=network.target
+
+        [Service]
+        Type=simple
+        User=ubuntu
+        WorkingDirectory=/opt/${{ env.APP_NAME }}
+        ExecStart=/opt/${{ env.APP_NAME }}/${{ env.APP_NAME }}
+        Restart=always
+        RestartSec=5
+        Environment=PAGODA_APP_ENVIRONMENT=production
+        Environment=PAGODA_HTTP_PORT=8000
+        Environment=PAGODA_APP_HOST=${{ secrets.APP_HOST }}
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        
+        # Create deployment script
+        cat > deploy/deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        APP_NAME=$1
+        DEPLOY_DIR="/opt/$APP_NAME"
+        
+        echo "Starting deployment of $APP_NAME..."
+        
+        # Stop the service if it's running
+        sudo systemctl stop $APP_NAME || true
+        
+        # Create application directory
+        sudo mkdir -p $DEPLOY_DIR
+        
+        # Copy application files
+        sudo cp $APP_NAME $DEPLOY_DIR/
+        sudo cp -r public $DEPLOY_DIR/ 2>/dev/null || true
+        sudo cp -r static $DEPLOY_DIR/ 2>/dev/null || true
+        sudo cp config.yaml $DEPLOY_DIR/ 2>/dev/null || true
+        
+        # Set ownership
+        sudo chown -R ubuntu:ubuntu $DEPLOY_DIR
+        
+        # Install systemd service
+        sudo cp $APP_NAME.service /etc/systemd/system/
+        sudo systemctl daemon-reload
+        sudo systemctl enable $APP_NAME
+        
+        # Start the service
+        sudo systemctl start $APP_NAME
+        
+        # Check status
+        sleep 3
+        sudo systemctl status $APP_NAME --no-pager
+        
+        echo "Deployment completed successfully!"
+        EOF
+        
+        chmod +x deploy/deploy.sh
+
+    - name: Deploy to Lightsail
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.LIGHTSAIL_HOST }}
+        username: ${{ secrets.LIGHTSAIL_USER }}
+        key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+        port: 22
+        script_stop: true
+        script: |
+          # Create temporary directory
+          TEMP_DIR=$(mktemp -d)
+          cd $TEMP_DIR
+          
+          # Download deployment files
+          echo "Downloading deployment files..."
+          
+        # Upload files
+        files: |
+          deploy/*
+        dest: /tmp/deploy/
+
+    - name: Execute deployment script
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.LIGHTSAIL_HOST }}
+        username: ${{ secrets.LIGHTSAIL_USER }}
+        key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+        port: 22
+        script: |
+          cd /tmp/deploy
+          chmod +x deploy.sh
+          ./deploy.sh ${{ env.APP_NAME }}
+          
+          # Clean up
+          rm -rf /tmp/deploy
+
+    - name: Health check
+      run: |
+        sleep 10
+        curl -f http://${{ secrets.LIGHTSAIL_HOST }}:8000/health || exit 1
