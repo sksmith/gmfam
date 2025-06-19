@@ -88,16 +88,16 @@ jobs:
         sudo mkdir -p $DEPLOY_DIR/dbs
         
         # Copy application files
-        sudo cp $APP_NAME $DEPLOY_DIR/
-        sudo cp -r public $DEPLOY_DIR/ 2>/dev/null || true
-        sudo cp -r static $DEPLOY_DIR/ 2>/dev/null || true
-        sudo cp config.yaml $DEPLOY_DIR/ 2>/dev/null || true
+        sudo cp /tmp/$APP_NAME $DEPLOY_DIR/
+        sudo cp -r /tmp/public $DEPLOY_DIR/ 2>/dev/null || true
+        sudo cp -r /tmp/static $DEPLOY_DIR/ 2>/dev/null || true
+        sudo cp /tmp/config.yaml $DEPLOY_DIR/ 2>/dev/null || true
         
         # Set ownership
         sudo chown -R ubuntu:ubuntu $DEPLOY_DIR
         
         # Install systemd service
-        sudo cp $APP_NAME.service /etc/systemd/system/
+        sudo cp /tmp/$APP_NAME.service /etc/systemd/system/
         sudo systemctl daemon-reload
         sudo systemctl enable $APP_NAME
         
@@ -121,7 +121,8 @@ jobs:
         key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
         port: 22
         source: "deploy/*"
-        target: "/tmp/deploy/"
+        target: "/tmp/"
+        strip_components: 1
 
     - name: Execute deployment script
       uses: appleboy/ssh-action@v1.0.0
@@ -133,12 +134,18 @@ jobs:
         timeout: 60s
         command_timeout: 10m
         script: |
-          cd /tmp/deploy
-          chmod +x deploy.sh
-          ./deploy.sh ${{ env.APP_NAME }}
+          # List files to debug
+          echo "Files in /tmp:"
+          ls -la /tmp/
+          
+          # Make sure deploy.sh is executable and run it
+          chmod +x /tmp/deploy.sh
+          /tmp/deploy.sh ${{ env.APP_NAME }}
           
           # Clean up
-          rm -rf /tmp/deploy
+          rm -f /tmp/deploy.sh /tmp/${{ env.APP_NAME }} /tmp/${{ env.APP_NAME }}.service
+          rm -rf /tmp/public /tmp/static
+          rm -f /tmp/config.yaml
 
     - name: Health check
       run: |
