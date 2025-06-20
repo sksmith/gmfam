@@ -13,6 +13,10 @@ import (
 	"github.com/mikestefanello/pagoda/pkg/services"
 )
 
+func init() {
+	fmt.Println("INIT FUNCTION RUNNING - IF YOU SEE THIS, INIT FUNCTIONS WORK")
+}
+
 func main() {
 	fmt.Println("SEAN ADDED MANUAL LOG")
 
