@@ -47,7 +47,7 @@ watch: ## Run the application and watch for changes with air to automatically re
 
 .PHONY: test
 test: ## Run all tests
-	go test ./...
+	SKIP_DB_TESTS=$(SKIP_DB_TESTS) go test ./...
 
 .PHONY: check-updates
 check-updates: ## Check for direct dependency updates

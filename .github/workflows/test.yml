@@ -28,6 +28,14 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
+    - name: Verify environment
+      env:
+        SKIP_DB_TESTS: "true"
+      run: |
+        echo "SKIP_DB_TESTS is set to: $SKIP_DB_TESTS"
+        echo "Environment variables:"
+        env | grep SKIP || echo "SKIP_DB_TESTS not found"
+
     - name: Test
       env:
         SKIP_DB_TESTS: "true"
