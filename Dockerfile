@@ -28,7 +28,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-s -w" -o 
 FROM alpine:latest
 
 # Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata
+RUN apk --no-cache add ca-certificates tzdata netcat-openbsd
 
 # Create app user
 RUN adduser -D -s /bin/sh appuser
@@ -61,5 +61,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1
 
-# Run the application with detailed logging
-CMD ["sh", "-c", "echo 'Container startup initiated...' && echo 'Current user:' && whoami && echo 'Working directory:' && pwd && echo 'Directory contents:' && ls -la && echo 'Environment variables:' && env | grep PAGODA | sort && echo 'Starting application...' && ./main 2>&1"]
+# Temporary debugging - run a simple HTTP server to test container infrastructure
+CMD ["sh", "-c", "echo 'Container startup initiated...' && echo 'Current user:' && whoami && echo 'Working directory:' && pwd && echo 'Directory contents:' && ls -la && echo 'Environment variables:' && env | grep PAGODA | sort && echo 'Testing with simple HTTP server...' && while true; do echo 'HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello World!\n' | nc -l -p 8000; done"]
