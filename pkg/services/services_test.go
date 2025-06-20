@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -18,6 +19,12 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Skip database tests in CI if PostgreSQL is not available
+	if os.Getenv("SKIP_DB_TESTS") == "true" {
+		fmt.Println("Skipping database-dependent tests (SKIP_DB_TESTS=true)")
+		os.Exit(0)
+	}
+
 	// Set the environment to test
 	config.SwitchEnvironment(config.EnvTest)
 

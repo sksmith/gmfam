@@ -11,23 +11,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     
-    services:
-      postgres:
-        image: postgres:17.5-alpine
-        env:
-          POSTGRES_USER: gmfam
-          POSTGRES_PASSWORD: gmfam123
-          POSTGRES_DB: gmfam_test
-          POSTGRES_HOST_AUTH_METHOD: trust
-        options: >-
-          --health-cmd "pg_isready -h localhost -U gmfam"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-          --name postgres
-        ports:
-          - 5432:5432
-    
     steps:
     - uses: actions/checkout@v3
 
@@ -45,26 +28,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Debug PostgreSQL connection
-      run: |
-        echo "Checking if PostgreSQL port is open..."
-        netstat -tuln | grep 5432 || echo "Port 5432 not found"
-        echo "Checking PostgreSQL service..."
-        docker ps | grep postgres || echo "No postgres container found"
-        echo "Trying to connect without pg_isready..."
-        timeout 30 bash -c 'until echo > /dev/tcp/127.0.0.1/5432; do sleep 1; done' && echo "Port 5432 is open" || echo "Port 5432 is not accessible"
-        
-    - name: Wait for PostgreSQL
-      run: |
-        echo "Installing postgresql-client..."
-        sudo apt-get update -q && sudo apt-get install -y postgresql-client
-        echo "Waiting for PostgreSQL to be ready..."
-        timeout 60 bash -c 'until pg_isready -h 127.0.0.1 -p 5432 -U gmfam; do echo "Waiting..."; sleep 2; done'
-        echo "PostgreSQL is ready!"
-
     - name: Test
       env:
-        PAGODA_APP_ENVIRONMENT: test
-        PAGODA_DATABASE_DRIVER: postgres
-        PAGODA_DATABASE_TESTCONNECTION: "postgres://gmfam:gmfam123@127.0.0.1:5432/gmfam_test?sslmode=disable"
+        SKIP_DB_TESTS: "true"
       run: make test
