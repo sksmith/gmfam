@@ -12,6 +12,7 @@ services:
       # Override config values using PAGODA_ prefix
       PAGODA_APP_ENVIRONMENT: "local"
       PAGODA_DATABASE_CONNECTION: "postgres://gmfam:gmfam123@postgres:5432/gmfam?sslmode=disable"
+      PAGODA_DATABASE_TESTCONNECTION: "postgres://gmfam:gmfam123@postgres:5432/gmfam_test?sslmode=disable"
       PAGODA_HTTP_HOSTNAME: "localhost"
       PAGODA_HTTP_PORT: 8000
       PAGODA_APP_ENCRYPTIONKEY: "development-key-change-in-production"

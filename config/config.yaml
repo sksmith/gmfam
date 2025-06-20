@@ -31,9 +31,9 @@ cache:
 
 database:
   driver: "postgres"
-  connection: "postgres://gmfam:gmfam123@localhost:5432/gmfam_dev?sslmode=disable"
+  connection: "postgres://gmfam:gmfam123@127.0.0.1:5432/gmfam_dev?sslmode=disable"
   # For tests, use a separate test database
-  testConnection: "postgres://gmfam:gmfam123@localhost:5432/gmfam_test?sslmode=disable"
+  testConnection: "postgres://gmfam:gmfam123@127.0.0.1:5432/gmfam_test?sslmode=disable"
 
 files:
   directory: "uploads"
