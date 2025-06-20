@@ -22,7 +22,7 @@ RUN go generate ./...
 
 # Build the application
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-s -w" -o main ./cmd/web && \
-    echo "Binary built successfully:" && ls -la main && file main
+    echo "Binary built successfully:" && ls -la main
 
 # Final stage
 FROM alpine:latest
@@ -44,7 +44,7 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/config ./config
 
 # Verify binary is executable
-RUN echo "Verifying binary in final stage:" && ls -la main && file main
+RUN echo "Verifying binary in final stage:" && ls -la main
 
 # Create directories for app data with proper permissions
 RUN mkdir -p /app/dbs /app/uploads && \
