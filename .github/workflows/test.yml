@@ -18,11 +18,13 @@ jobs:
           POSTGRES_USER: gmfam
           POSTGRES_PASSWORD: gmfam123
           POSTGRES_DB: gmfam_test
+          POSTGRES_HOST_AUTH_METHOD: trust
         options: >-
-          --health-cmd "pg_isready -U gmfam"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd "pg_isready -h localhost -U gmfam"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+          --name postgres
         ports:
           - 5432:5432
     
@@ -55,19 +57,10 @@ jobs:
     - name: Wait for PostgreSQL
       run: |
         echo "Installing postgresql-client..."
-        sudo apt-get update && sudo apt-get install -y postgresql-client
+        sudo apt-get update -q && sudo apt-get install -y postgresql-client
         echo "Waiting for PostgreSQL to be ready..."
-        for i in {1..30}; do
-          if pg_isready -h 127.0.0.1 -p 5432 -U gmfam; then
-            echo "PostgreSQL is ready!"
-            break
-          else
-            echo "Attempt $i: PostgreSQL not ready, waiting..."
-            sleep 2
-          fi
-        done
-        echo "Final PostgreSQL check..."
-        pg_isready -h 127.0.0.1 -p 5432 -U gmfam || exit 1
+        timeout 60 bash -c 'until pg_isready -h 127.0.0.1 -p 5432 -U gmfam; do echo "Waiting..."; sleep 2; done'
+        echo "PostgreSQL is ready!"
 
     - name: Test
       env:
