@@ -21,7 +21,8 @@ RUN go install entgo.io/ent/cmd/ent@latest
 RUN go generate ./...
 
 # Build the application
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-s -w" -o main ./cmd/web
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-s -w" -o main ./cmd/web && \
+    echo "Binary built successfully:" && ls -la main && file main
 
 # Final stage
 FROM alpine:latest
@@ -38,14 +39,17 @@ WORKDIR /app
 # Copy binary from builder stage
 COPY --from=builder /app/main .
 
-# Copy static files
+# Copy static files and config
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/config ./config
 
-# Create directories for app data
-RUN mkdir -p /app/dbs /app/uploads
+# Verify binary is executable
+RUN echo "Verifying binary in final stage:" && ls -la main && file main
 
-# Change ownership
-RUN chown -R appuser:appuser /app
+# Create directories for app data with proper permissions
+RUN mkdir -p /app/dbs /app/uploads && \
+    chmod -R 755 /app && \
+    chown -R appuser:appuser /app
 
 # Switch to app user
 USER appuser
@@ -57,5 +61,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1
 
-# Run the application
-CMD ["./main"]
+# Run the application with detailed logging
+CMD ["sh", "-c", "echo 'Container startup initiated...' && echo 'Current user:' && whoami && echo 'Working directory:' && pwd && echo 'Directory contents:' && ls -la && echo 'Environment variables:' && env | grep PAGODA | sort && echo 'Starting application...' && ./main 2>&1"]
