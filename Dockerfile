@@ -27,8 +27,8 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-s -w" -o 
 # Final stage
 FROM docker.io/alpine:latest
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata python3
+# Install runtime dependencies including PostgreSQL client for debugging
+RUN apk --no-cache add ca-certificates tzdata python3 postgresql-client
 
 # Create app user
 RUN adduser -D -s /bin/sh appuser
@@ -61,5 +61,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1
 
-# Run with startup logging for debugging
-CMD ["sh", "-c", "echo 'Container startup initiated at:' $(date) && echo 'Environment variables:' && env | grep PAGODA | sort && echo 'Starting application...' && exec ./main"]
+# Run with extensive debugging and keep container alive if app fails
+CMD ["sh", "-c", "echo 'Container startup initiated at:' $(date) && echo 'Environment variables:' && env | grep PAGODA | sort && echo 'Starting application...' && ./main || (echo 'Application failed with exit code $?, sleeping to keep container alive for debugging...' && sleep 600)"]
