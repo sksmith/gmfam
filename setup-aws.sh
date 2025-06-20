@@ -443,8 +443,8 @@ set_github_secrets() {
     
     print_info "Configuring GitHub secrets for automated deployment..."
     
-    # Build database connection string
-    local db_connection="postgres://${db_username}:${db_password}@${db_endpoint}:5432/${db_name}?sslmode=require"
+    # Build database connection string (use sslmode=disable for Lightsail databases)
+    local db_connection="postgres://${db_username}:${db_password}@${db_endpoint}:5432/${db_name}?sslmode=disable"
     
     # Prepare secrets array
     declare -A secrets_map=(
@@ -773,122 +773,137 @@ collect_deployment_config() {
     fi
 }
 
-# Function to create RDS database
+# Function to create Lightsail database
 create_database() {
-    print_header "Creating RDS Database"
+    print_header "Creating Lightsail Database"
     
     local db_instance_id="${app_name}-db"
-    local db_subnet_group_name="${app_name}-db-subnet-group"
-    local db_security_group_name="${app_name}-db-sg"
+    local db_blueprint="postgres_17"
+    local db_bundle="micro_2_0"  # Lightsail database bundle
     
-    # Create VPC and networking (simplified - using default VPC)
-    local vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query 'Vpcs[0].VpcId' --output text)
-    
-    if [[ "$vpc_id" == "None" ]]; then
-        print_error "No default VPC found. Please create a VPC first."
-        exit 1
-    fi
-    
-    # Get subnet IDs
-    local subnet_ids=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[].SubnetId' --output text)
-    
-    # Create DB subnet group
-    print_info "Creating DB subnet group..."
-    aws rds create-db-subnet-group \
-        --db-subnet-group-name "$db_subnet_group_name" \
-        --db-subnet-group-description "Subnet group for $app_name database" \
-        --subnet-ids $subnet_ids \
-        --tags Key=Application,Value=$app_name \
-        >/dev/null 2>&1 || print_warning "DB subnet group may already exist"
-    
-    # Create security group for database
-    print_info "Creating database security group..."
-    local db_sg_id=$(aws ec2 create-security-group \
-        --group-name "$db_security_group_name" \
-        --description "Security group for $app_name database" \
-        --vpc-id "$vpc_id" \
-        --query 'GroupId' --output text 2>/dev/null || \
-        aws ec2 describe-security-groups --group-names "$db_security_group_name" --query 'SecurityGroups[0].GroupId' --output text)
-    
-    # Allow MySQL/PostgreSQL access from application
-    aws ec2 authorize-security-group-ingress \
-        --group-id "$db_sg_id" \
-        --protocol tcp \
-        --port 5432 \
-        --cidr 10.0.0.0/8 \
-        >/dev/null 2>&1 || true
-    
-    # Check if RDS instance already exists
-    if aws rds describe-db-instances --db-instance-identifier "$db_instance_id" >/dev/null 2>&1; then
-        print_success "RDS instance already exists"
-        local existing_status=$(aws rds describe-db-instances --db-instance-identifier "$db_instance_id" --query 'DBInstances[0].DBInstanceStatus' --output text)
+    # Check if Lightsail database already exists
+    if aws lightsail get-relational-database --relational-database-name "$db_instance_id" >/dev/null 2>&1; then
+        print_success "Lightsail database already exists"
+        local existing_status=$(aws lightsail get-relational-database \
+            --relational-database-name "$db_instance_id" \
+            --query 'relationalDatabase.state' \
+            --output text)
         print_info "Current status: $existing_status"
         
         if [[ "$existing_status" != "available" ]]; then
-            print_info "Waiting for existing RDS instance to become available..."
-            aws rds wait db-instance-available --db-instance-identifier "$db_instance_id"
+            print_info "Waiting for existing Lightsail database to become available..."
+            # Wait for database to be ready
+            local max_attempts=60
+            local attempt=0
+            
+            while [ $attempt -lt $max_attempts ]; do
+                local state=$(aws lightsail get-relational-database \
+                    --relational-database-name "$db_instance_id" \
+                    --query 'relationalDatabase.state' \
+                    --output text 2>/dev/null || echo "pending")
+                
+                if [[ "$state" == "available" ]]; then
+                    print_success "Database is available!"
+                    break
+                elif [[ "$state" == "failed" ]]; then
+                    print_error "Database creation failed"
+                    exit 1
+                else
+                    echo -n "."
+                    sleep 10
+                    ((attempt++))
+                fi
+            done
+            
+            if [ $attempt -eq $max_attempts ]; then
+                print_warning "Database is taking longer than expected to be ready"
+                print_info "You can check status at: https://lightsail.aws.amazon.com/"
+            fi
         fi
     else
-        # Create RDS instance
-        print_info "Creating RDS PostgreSQL instance (this may take 10-15 minutes)..."
+        # Create Lightsail database
+        print_info "Creating Lightsail PostgreSQL database (this may take 10-15 minutes)..."
         
-        if aws rds create-db-instance \
-            --db-instance-identifier "$db_instance_id" \
-            --db-instance-class "db.t3.micro" \
-            --engine "postgres" \
-            --engine-version "17.5" \
+        if aws lightsail create-relational-database \
+            --relational-database-name "$db_instance_id" \
+            --relational-database-blueprint-id "$db_blueprint" \
+            --relational-database-bundle-id "$db_bundle" \
+            --master-database-name "$db_name" \
             --master-username "$db_username" \
             --master-user-password "$db_password" \
-            --allocated-storage 20 \
-            --storage-type "gp2" \
-            --vpc-security-group-ids "$db_sg_id" \
-            --db-subnet-group-name "$db_subnet_group_name" \
-            --db-name "$db_name" \
-            --backup-retention-period 7 \
-            --storage-encrypted \
-            --tags Key=Application,Value=$app_name \
-            --no-multi-az \
-            --no-publicly-accessible \
+            --backup-retention-enabled \
+            --preferred-backup-window "03:00-04:00" \
+            --preferred-maintenance-window "sun:04:00-sun:05:00" \
+            --publicly-accessible \
+            --tags key=Application,value=$app_name \
             >/dev/null 2>&1; then
             
-            print_success "RDS instance creation initiated"
-            print_info "Waiting for RDS instance to become available..."
-            aws rds wait db-instance-available --db-instance-identifier "$db_instance_id"
+            print_success "Lightsail database creation initiated"
+            print_info "Waiting for Lightsail database to become available..."
+            
+            # Wait for database to be ready
+            local max_attempts=90  # Longer timeout for database creation
+            local attempt=0
+            
+            while [ $attempt -lt $max_attempts ]; do
+                local state=$(aws lightsail get-relational-database \
+                    --relational-database-name "$db_instance_id" \
+                    --query 'relationalDatabase.state' \
+                    --output text 2>/dev/null || echo "pending")
+                
+                echo "Database state: $state"
+                
+                if [[ "$state" == "available" ]]; then
+                    print_success "Database is available!"
+                    break
+                elif [[ "$state" == "failed" ]]; then
+                    print_error "Database creation failed"
+                    exit 1
+                else
+                    echo -n "."
+                    sleep 10
+                    ((attempt++))
+                fi
+            done
+            
+            if [ $attempt -eq $max_attempts ]; then
+                print_warning "Database is taking longer than expected to be ready"
+                print_info "You can check status at: https://lightsail.aws.amazon.com/"
+                print_info "Continuing with setup - you may need to wait for the database to be ready"
+            fi
         else
-            print_error "Failed to create RDS instance"
+            print_error "Failed to create Lightsail database"
             print_info "Checking what went wrong..."
             
             # Try to get more specific error information
-            aws rds create-db-instance \
-                --db-instance-identifier "$db_instance_id" \
-                --db-instance-class "db.t3.micro" \
-                --engine "postgres" \
-                --engine-version "17.5" \
+            aws lightsail create-relational-database \
+                --relational-database-name "$db_instance_id" \
+                --relational-database-blueprint-id "$db_blueprint" \
+                --relational-database-bundle-id "$db_bundle" \
+                --master-database-name "$db_name" \
                 --master-username "$db_username" \
                 --master-user-password "$db_password" \
-                --allocated-storage 20 \
-                --storage-type "gp2" \
-                --vpc-security-group-ids "$db_sg_id" \
-                --db-subnet-group-name "$db_subnet_group_name" \
-                --db-name "$db_name" \
-                --backup-retention-period 7 \
-                --storage-encrypted \
-                --tags Key=Application,Value=$app_name \
-                --no-multi-az \
-                --no-publicly-accessible 2>&1
+                --backup-retention-enabled \
+                --preferred-backup-window "03:00-04:00" \
+                --preferred-maintenance-window "sun:04:00-sun:05:00" \
+                --publicly-accessible \
+                --tags key=Application,value=$app_name 2>&1
             
             exit 1
         fi
     fi
     
-    # Get RDS endpoint
-    db_endpoint=$(aws rds describe-db-instances \
-        --db-instance-identifier "$db_instance_id" \
-        --query 'DBInstances[0].Endpoint.Address' \
+    # Get Lightsail database endpoint
+    db_endpoint=$(aws lightsail get-relational-database \
+        --relational-database-name "$db_instance_id" \
+        --query 'relationalDatabase.masterEndpoint.address' \
         --output text)
     
-    print_success "RDS database created successfully"
+    print_success "Lightsail database created successfully"
     print_info "Database endpoint: $db_endpoint"
+    
+    # Update the connection string to not require SSL (Lightsail databases handle this differently)
+    db_connection_mode="disable"  # Use sslmode=disable for Lightsail databases
 }
 
 # Function to create ECR repository
@@ -1238,7 +1253,7 @@ cache:
 
 database:
   driver: "postgres"
-  connection: "postgres://${db_username}:${db_password}@${db_endpoint}:5432/${db_name}?sslmode=require"
+  connection: "postgres://${db_username}:${db_password}@${db_endpoint}:5432/${db_name}?sslmode=disable"
   testConnection: "file:/$RAND?vfs=memdb&_timeout=1000&_fk=true"
 
 files:
@@ -1272,7 +1287,7 @@ generate_summary() {
     echo "✅ GitHub Repository: https://github.com/$repo_full_name"
     echo "✅ ECR Repository: ${ecr_uri}"
     echo "✅ Lightsail Container Service: ${lightsail_service_name}"
-    echo "✅ RDS PostgreSQL Database: ${db_endpoint}"
+    echo "✅ Lightsail PostgreSQL Database: ${db_endpoint}"
     echo "✅ IAM Role for GitHub Actions: ${role_arn}"
     echo "✅ Production Configuration: config/config.prod.yaml"
     echo "✅ GitHub Secrets: Automatically configured"
@@ -1303,7 +1318,7 @@ generate_summary() {
     echo "Estimated Monthly Costs:"
     echo "======================="
     echo "- Lightsail Container Service (micro): ~$7/month"
-    echo "- RDS PostgreSQL (db.t3.micro): ~$15/month"
+    echo "- Lightsail PostgreSQL Database (micro): ~$15/month"
     echo "- ECR Storage: ~$0.10/month"
     echo "- Data Transfer: ~$0.50/month"
     echo "- Total: ~$22.60/month"
@@ -1329,7 +1344,7 @@ main() {
     echo "Log file: $LOG_FILE"
     echo
     
-    print_warning "This script will create AWS resources that incur costs (~$19/month)"
+    print_warning "This script will create AWS resources that incur costs (~$23/month)"
     print_warning "Make sure you understand the costs before proceeding"
     echo
     prompt_user "Do you want to continue? (y/n)" "continue_setup" "y"
