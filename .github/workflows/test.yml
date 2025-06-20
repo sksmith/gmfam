@@ -32,7 +32,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v3
       with:
-        go-version: 1.23
+        go-version: 1.24
 
     - uses: actions/cache@v3
       with:
@@ -43,5 +43,17 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
+    - name: Wait for PostgreSQL
+      run: |
+        until pg_isready -h localhost -p 5432 -U gmfam; do
+          echo "Waiting for PostgreSQL..."
+          sleep 2
+        done
+        echo "PostgreSQL is ready!"
+
     - name: Test
+      env:
+        PAGODA_APP_ENVIRONMENT: test
+        PAGODA_DATABASE_DRIVER: postgres
+        PAGODA_DATABASE_TESTCONNECTION: "postgres://gmfam:gmfam123@localhost:5432/gmfam_test?sslmode=disable"
       run: make test

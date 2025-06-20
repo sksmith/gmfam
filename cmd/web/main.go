@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"github.com/mikestefanello/pagoda/pkg/handlers"
 	"github.com/mikestefanello/pagoda/pkg/log"
 	"github.com/mikestefanello/pagoda/pkg/services"
-	"github.com/mikestefanello/pagoda/pkg/tasks"
 )
 
 func main() {
