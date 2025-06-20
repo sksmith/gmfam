@@ -449,10 +449,10 @@ set_github_secrets() {
     # Prepare secrets array
     declare -A secrets_map=(
         ["AWS_ARN_OIDC_ACCESS"]="$role_arn"
-        ["LIGHTSAIL_HOST"]="$lightsail_ip"
-        ["LIGHTSAIL_USER"]="ubuntu"
+        ["ECR_REPOSITORY"]="$ecr_uri"
+        ["LIGHTSAIL_SERVICE_NAME"]="$lightsail_service_name"
         ["PAGODA_DATABASE_CONNECTION"]="$db_connection"
-        ["PAGODA_APP_HOST"]="http://${lightsail_ip}:8000"
+        ["PAGODA_APP_HOST"]="$lightsail_url"
         ["PAGODA_APP_ENCRYPTIONKEY"]="$app_encryption_key"
         ["PAGODA_MAIL_HOSTNAME"]="localhost"
         ["PAGODA_MAIL_PORT"]="25"
@@ -474,19 +474,6 @@ set_github_secrets() {
         fi
     done
     
-    # Handle SSH key separately (multiline)
-    print_info "Setting SSH key secret..."
-    if [[ -f "${app_name}-key.pem" ]]; then
-        if ssh_secret_output=$(gh secret set "LIGHTSAIL_SSH_KEY" --body-file "${app_name}-key.pem" --repo "$repo_full_name" 2>&1); then
-            print_success "✅ LIGHTSAIL_SSH_KEY"
-        else
-            print_error "❌ Failed to set LIGHTSAIL_SSH_KEY"
-            print_info "Error: $ssh_secret_output"
-        fi
-    else
-        print_error "❌ SSH key file not found: ${app_name}-key.pem"
-        print_info "This is required for deployment to work"
-    fi
     
     print_success "GitHub secrets configuration completed!"
     print_info "🔗 Manage secrets: https://github.com/$repo_full_name/settings/secrets/actions"
@@ -494,7 +481,7 @@ set_github_secrets() {
     # Validate critical secrets are set
     print_info "Validating GitHub secrets..."
     
-    critical_secrets=("AWS_ARN_OIDC_ACCESS" "LIGHTSAIL_HOST" "LIGHTSAIL_SSH_KEY")
+    critical_secrets=("AWS_ARN_OIDC_ACCESS" "ECR_REPOSITORY" "LIGHTSAIL_SERVICE_NAME")
     for secret in "${critical_secrets[@]}"; do
         if gh secret list --repo "$repo_full_name" | grep -q "^$secret"; then
             print_success "✅ $secret is set"
@@ -902,63 +889,135 @@ create_database() {
     print_info "Database endpoint: $db_endpoint"
 }
 
-# Function to create Lightsail instance
-create_lightsail_instance() {
-    print_header "Creating Lightsail Instance"
+# Function to create ECR repository
+create_ecr_repository() {
+    print_header "Creating ECR Repository"
     
-    local instance_name="${app_name}-server"
-    local blueprint_id="ubuntu_20_04"
-    local bundle_id="micro_2_0"  # $3.50/month
+    local repo_name="${app_name}"
     
-    # Create Lightsail instance
-    print_info "Creating Lightsail instance..."
-    aws lightsail create-instances \
-        --instance-names "$instance_name" \
-        --availability-zone "${aws_region}a" \
-        --blueprint-id "$blueprint_id" \
-        --bundle-id "$bundle_id" \
+    # Create ECR repository
+    print_info "Creating ECR repository..."
+    if ecr_uri=$(aws ecr create-repository \
+        --repository-name "$repo_name" \
+        --query 'repository.repositoryUri' \
+        --output text 2>&1); then
+        print_success "ECR repository created successfully"
+        print_info "Repository URI: $ecr_uri"
+    elif aws ecr describe-repositories --repository-names "$repo_name" >/dev/null 2>&1; then
+        print_success "ECR repository already exists"
+        ecr_uri=$(aws ecr describe-repositories \
+            --repository-names "$repo_name" \
+            --query 'repositories[0].repositoryUri' \
+            --output text)
+        print_info "Repository URI: $ecr_uri"
+    else
+        print_error "Failed to create ECR repository"
+        print_info "Error: $ecr_uri"
+        exit 1
+    fi
+    
+    # Set repository lifecycle policy to manage image retention
+    print_info "Setting up ECR lifecycle policy..."
+    cat > ecr-lifecycle-policy.json << EOF
+{
+    "rules": [
+        {
+            "rulePriority": 1,
+            "description": "Keep last 10 images",
+            "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 10
+            },
+            "action": {
+                "type": "expire"
+            }
+        }
+    ]
+}
+EOF
+    
+    if aws ecr put-lifecycle-policy \
+        --repository-name "$repo_name" \
+        --lifecycle-policy-text file://ecr-lifecycle-policy.json \
+        >/dev/null 2>&1; then
+        print_success "ECR lifecycle policy set successfully"
+    else
+        print_warning "Failed to set ECR lifecycle policy (repository may already have one)"
+    fi
+    
+    rm -f ecr-lifecycle-policy.json
+}
+
+# Function to create Lightsail Container Service
+create_lightsail_container_service() {
+    print_header "Creating Lightsail Container Service"
+    
+    local service_name="${app_name}-container-service"
+    local power="micro"  # nano, micro, small, medium, large, xlarge
+    local scale="1"      # Number of nodes
+    
+    # Create Lightsail container service
+    print_info "Creating Lightsail container service..."
+    if aws lightsail create-container-service \
+        --service-name "$service_name" \
+        --power "$power" \
+        --scale "$scale" \
         --tags key=Application,value=$app_name \
-        >/dev/null 2>&1 || print_warning "Lightsail instance may already exist"
+        >/dev/null 2>&1; then
+        print_success "Lightsail container service creation initiated"
+    elif aws lightsail get-container-services --service-name "$service_name" >/dev/null 2>&1; then
+        print_success "Lightsail container service already exists"
+    else
+        print_error "Failed to create Lightsail container service"
+        exit 1
+    fi
     
-    # Wait for instance to be running
-    print_info "Waiting for Lightsail instance to be running..."
-    while true; do
-        local state=$(aws lightsail get-instance --instance-name "$instance_name" --query 'instance.state.name' --output text 2>/dev/null || echo "pending")
-        if [[ "$state" == "running" ]]; then
+    # Wait for container service to be ready
+    print_info "Waiting for container service to be ready (this may take 5-10 minutes)..."
+    local max_attempts=60
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        local state=$(aws lightsail get-container-services \
+            --service-name "$service_name" \
+            --query 'containerServices[0].state' \
+            --output text 2>/dev/null || echo "PENDING")
+        
+        if [[ "$state" == "READY" ]]; then
+            print_success "Container service is ready!"
             break
+        elif [[ "$state" == "FAILED" ]]; then
+            print_error "Container service creation failed"
+            exit 1
+        else
+            echo -n "."
+            sleep 10
+            ((attempt++))
         fi
-        echo -n "."
-        sleep 10
     done
-    echo
     
-    # Get instance IP
-    lightsail_ip=$(aws lightsail get-instance \
-        --instance-name "$instance_name" \
-        --query 'instance.publicIpAddress' \
-        --output text)
+    if [ $attempt -eq $max_attempts ]; then
+        print_warning "Container service is taking longer than expected to be ready"
+        print_info "You can check status at: https://lightsail.aws.amazon.com/"
+    fi
     
-    # Open firewall ports
-    print_info "Configuring firewall..."
-    aws lightsail put-instance-port-info \
-        --instance-name "$instance_name" \
-        --port-infos fromPort=22,toPort=22,protocol=TCP \
-        --port-infos fromPort=80,toPort=80,protocol=TCP \
-        --port-infos fromPort=443,toPort=443,protocol=TCP \
-        --port-infos fromPort=8000,toPort=8000,protocol=TCP \
-        >/dev/null 2>&1
+    # Get container service URL
+    lightsail_url=$(aws lightsail get-container-services \
+        --service-name "$service_name" \
+        --query 'containerServices[0].url' \
+        --output text 2>/dev/null || echo "")
     
-    # Generate SSH key pair
-    print_info "Creating SSH key pair..."
-    aws lightsail create-key-pair \
-        --key-pair-name "${app_name}-key" \
-        --query 'privateKeyBase64' \
-        --output text | base64 -d > "${app_name}-key.pem"
-    chmod 600 "${app_name}-key.pem"
+    if [[ -n "$lightsail_url" && "$lightsail_url" != "None" ]]; then
+        print_success "Container service URL: $lightsail_url"
+    else
+        print_info "Container service URL will be available after first deployment"
+        lightsail_url="https://${service_name}.${aws_region}.cs.amazonlightsail.com"
+        print_info "Expected URL: $lightsail_url"
+    fi
     
-    print_success "Lightsail instance created successfully"
-    print_info "Instance IP: $lightsail_ip"
-    print_info "SSH key saved as: ${app_name}-key.pem"
+    # Store service name for later use
+    lightsail_service_name="$service_name"
 }
 
 # Function to create IAM role for GitHub Actions
@@ -1040,7 +1099,7 @@ EOF
         exit 1
     fi
     
-    # Create policy for Lightsail and basic AWS access
+    # Create policy for Lightsail, ECR and basic AWS access
     cat > role-policy.json << EOF
 {
     "Version": "2012-10-17",
@@ -1049,6 +1108,14 @@ EOF
             "Effect": "Allow",
             "Action": [
                 "lightsail:*",
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "ecr:PutImage",
+                "ecr:InitiateLayerUpload",
+                "ecr:UploadLayerPart",
+                "ecr:CompleteLayerUpload",
                 "ec2:DescribeInstances",
                 "ec2:DescribeImages",
                 "ec2:DescribeSnapshots",
@@ -1189,12 +1256,13 @@ generate_summary() {
     echo "Resources Created:"
     echo "=================="
     echo "✅ GitHub Repository: https://github.com/$repo_full_name"
-    echo "✅ Lightsail Instance: ${lightsail_ip}"
+    echo "✅ ECR Repository: ${ecr_uri}"
+    echo "✅ Lightsail Container Service: ${lightsail_service_name}"
     echo "✅ RDS PostgreSQL Database: ${db_endpoint}"
     echo "✅ IAM Role for GitHub Actions: ${role_arn}"
-    echo "✅ SSH Key Pair: ${app_name}-key.pem"
     echo "✅ Production Configuration: config/config.prod.yaml"
     echo "✅ GitHub Secrets: Automatically configured"
+    echo "✅ Dockerfile: Ready for containerized deployment"
     echo
     echo "🚀 Your Application is Ready!"
     echo "=========================="
@@ -1202,16 +1270,17 @@ generate_summary() {
     echo "2. ✅ GitHub secrets configured automatically"
     echo "3. ✅ AWS infrastructure provisioned"
     echo "4. ⏳ GitHub Actions will deploy your app automatically"
-    echo "5. 🌐 Your app will be available at: http://${lightsail_ip}:8000"
+    echo "5. 🌐 Your app will be available at: ${lightsail_url}"
     echo
     echo "📊 Monitor your deployment:"
     echo "- GitHub Actions: https://github.com/$repo_full_name/actions"
-    echo "- Application URL: http://${lightsail_ip}:8000"
-    echo "- AWS Console: https://console.aws.amazon.com"
+    echo "- Application URL: ${lightsail_url}"
+    echo "- Lightsail Console: https://lightsail.aws.amazon.com/"
+    echo "- ECR Console: https://console.aws.amazon.com/ecr/"
     echo
     echo "Important Files:"
     echo "==============="
-    echo "- SSH Key: ${app_name}-key.pem (keep this secure!)"
+    echo "- Dockerfile: For containerized deployment"
     echo "- Setup Log: $LOG_FILE"
     echo
     print_warning "Keep your SSH key and database credentials secure!"
@@ -1219,10 +1288,11 @@ generate_summary() {
     # Estimated costs
     echo "Estimated Monthly Costs:"
     echo "======================="
-    echo "- Lightsail Instance (micro): ~$3.50/month"
+    echo "- Lightsail Container Service (micro): ~$7/month"
     echo "- RDS PostgreSQL (db.t3.micro): ~$15/month"
+    echo "- ECR Storage: ~$0.10/month"
     echo "- Data Transfer: ~$0.50/month"
-    echo "- Total: ~$19/month"
+    echo "- Total: ~$22.60/month"
     echo
 }
 
@@ -1263,7 +1333,8 @@ main() {
     check_github_cli
     setup_github_repository
     create_database
-    create_lightsail_instance
+    create_ecr_repository
+    create_lightsail_container_service
     create_github_iam_role
     setup_production_config
     set_github_secrets
