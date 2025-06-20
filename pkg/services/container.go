@@ -162,11 +162,21 @@ func (c *Container) initDatabase() {
 	log.Default().Info("Initializing database connection",
 		"driver", c.Config.Database.Driver,
 		"environment", c.Config.App.Environment,
+		"connection_start", connection[:50]+"...", // Log start of connection string for debugging
 	)
 
 	c.Database, err = openDB(c.Config.Database.Driver, connection)
 	if err != nil {
 		log.Default().Error("Failed to connect to database",
+			"driver", c.Config.Database.Driver,
+			"error", err,
+		)
+		panic(err)
+	}
+
+	// Test the connection
+	if err = c.Database.Ping(); err != nil {
+		log.Default().Error("Database ping failed",
 			"driver", c.Config.Database.Driver,
 			"error", err,
 		)
@@ -198,8 +208,18 @@ func (c *Container) initORM() {
 
 	// Run the auto migration tool.
 	log.Default().Info("Running database migrations")
-	if err := c.ORM.Schema.Create(context.Background()); err != nil {
-		log.Default().Error("Failed to run database migrations", "error", err)
+	ctx := context.Background()
+	if err := c.ORM.Schema.Create(ctx); err != nil {
+		log.Default().Error("Failed to run database migrations", 
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+		)
+		// Try to get more detailed error information
+		if c.Database != nil {
+			if pingErr := c.Database.Ping(); pingErr != nil {
+				log.Default().Error("Database connection lost during migration", "ping_error", pingErr)
+			}
+		}
 		panic(err)
 	}
 	log.Default().Info("Database migrations completed")

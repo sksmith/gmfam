@@ -21,8 +21,20 @@ func main() {
 		"go_version", os.Getenv("GO_VERSION"),
 	)
 
+	// Catch any panics during initialization
+	defer func() {
+		if r := recover(); r != nil {
+			log.Default().Error("Application panic during startup",
+				"panic", r,
+			)
+			os.Exit(1)
+		}
+	}()
+
 	// Start a new container.
+	log.Default().Info("Initializing services container...")
 	c := services.NewContainer()
+	log.Default().Info("Services container initialized successfully")
 	defer func() {
 		// Gracefully shutdown all services.
 		fatal("shutdown failed", c.Shutdown())

@@ -61,5 +61,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1
 
-# Run the application directly without shell wrapper for better logging
-CMD ["./main"]
+# Run with startup logging for debugging
+CMD ["sh", "-c", "echo 'Container startup initiated at:' $(date) && echo 'Environment variables:' && env | grep PAGODA | sort && echo 'Starting application...' && exec ./main"]
