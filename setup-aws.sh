@@ -1028,6 +1028,18 @@ create_github_iam_role() {
     local policy_name="${app_name}-github-actions-policy"
     local account_id=$(aws sts get-caller-identity --query Account --output text)
     
+    # Get GitHub username if not already set
+    if [[ -z "$github_username" ]]; then
+        print_info "Getting GitHub username for IAM role trust policy..."
+        if command_exists gh && gh auth status >/dev/null 2>&1; then
+            github_username=$(gh api user --jq '.login' 2>&1)
+            print_info "GitHub username: $github_username"
+        else
+            print_warning "GitHub CLI not authenticated, using placeholder for trust policy"
+            github_username="*"
+        fi
+    fi
+    
     # Create OIDC provider for GitHub Actions if it doesn't exist
     print_info "Setting up GitHub OIDC provider..."
     local oidc_arn="arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
@@ -1330,16 +1342,18 @@ main() {
     configure_aws
     collect_deployment_config
     
-    # Create all AWS infrastructure first
+    # Set up GitHub authentication early to get username
+    check_git
+    check_github_cli
+    
+    # Create AWS infrastructure (needs GitHub username for IAM role)
     create_database
     create_ecr_repository
     create_lightsail_container_service
     create_github_iam_role
     setup_production_config
     
-    # Then set up GitHub repository and secrets
-    check_git
-    check_github_cli
+    # Set up GitHub repository and secrets
     setup_github_repository
     set_github_secrets
     
