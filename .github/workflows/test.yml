@@ -19,7 +19,7 @@ jobs:
           POSTGRES_PASSWORD: gmfam123
           POSTGRES_DB: gmfam_test
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U gmfam"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -43,13 +43,31 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
+    - name: Debug PostgreSQL connection
+      run: |
+        echo "Checking if PostgreSQL port is open..."
+        netstat -tuln | grep 5432 || echo "Port 5432 not found"
+        echo "Checking PostgreSQL service..."
+        docker ps | grep postgres || echo "No postgres container found"
+        echo "Trying to connect without pg_isready..."
+        timeout 30 bash -c 'until echo > /dev/tcp/127.0.0.1/5432; do sleep 1; done' && echo "Port 5432 is open" || echo "Port 5432 is not accessible"
+        
     - name: Wait for PostgreSQL
       run: |
-        until pg_isready -h 127.0.0.1 -p 5432 -U gmfam; do
-          echo "Waiting for PostgreSQL..."
-          sleep 2
+        echo "Installing postgresql-client..."
+        sudo apt-get update && sudo apt-get install -y postgresql-client
+        echo "Waiting for PostgreSQL to be ready..."
+        for i in {1..30}; do
+          if pg_isready -h 127.0.0.1 -p 5432 -U gmfam; then
+            echo "PostgreSQL is ready!"
+            break
+          else
+            echo "Attempt $i: PostgreSQL not ready, waiting..."
+            sleep 2
+          fi
         done
-        echo "PostgreSQL is ready!"
+        echo "Final PostgreSQL check..."
+        pg_isready -h 127.0.0.1 -p 5432 -U gmfam || exit 1
 
     - name: Test
       env:
