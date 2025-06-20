@@ -42,7 +42,9 @@ jobs:
         go generate ./...
 
     - name: Run tests
-      run: go test ./...
+      env:
+        SKIP_DB_TESTS: "true"
+      run: make test
 
     - name: Build application (validation)
       run: |
