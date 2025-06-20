@@ -105,7 +105,9 @@ jobs:
                 \"PAGODA_APP_ENVIRONMENT\": \"production\",
                 \"PAGODA_HTTP_PORT\": \"8000\",
                 \"PAGODA_APP_HOST\": \"${{ secrets.PAGODA_APP_HOST }}\",
+                \"PAGODA_DATABASE_DRIVER\": \"postgres\",
                 \"PAGODA_DATABASE_CONNECTION\": \"${{ secrets.PAGODA_DATABASE_CONNECTION }}\",
+                \"PAGODA_ORM_AUTO_MIGRATE\": \"true\",
                 \"PAGODA_APP_ENCRYPTIONKEY\": \"${{ secrets.PAGODA_APP_ENCRYPTIONKEY }}\",
                 \"PAGODA_MAIL_HOSTNAME\": \"${{ secrets.PAGODA_MAIL_HOSTNAME }}\",
                 \"PAGODA_MAIL_PORT\": \"${{ secrets.PAGODA_MAIL_PORT }}\",
@@ -124,7 +126,10 @@ jobs:
             \"containerPort\": 8000,
             \"healthCheck\": {
               \"path\": \"/\",
-              \"intervalSeconds\": 30
+              \"intervalSeconds\": 30,
+              \"timeoutSeconds\": 10,
+              \"unhealthyThresholdCount\": 5,
+              \"healthyThresholdCount\": 2
             }
           }"
 
@@ -134,8 +139,8 @@ jobs:
       run: |
         echo "Waiting for deployment to complete..."
         
-        # Wait for deployment to be active
-        max_attempts=30
+        # Wait for deployment to be active (extended for database migrations)
+        max_attempts=40
         attempt=0
         
         while [ $attempt -lt $max_attempts ]; do
