@@ -14,6 +14,8 @@ import (
 )
 
 func main() {
+	fmt.Println("SEAN ADDED MANUAL LOG")
+
 	// Log startup information
 	log.Default().Info("Application starting",
 		"environment", os.Getenv("PAGODA_APP_ENVIRONMENT"),
@@ -24,6 +26,7 @@ func main() {
 	// Catch any panics during initialization
 	defer func() {
 		if r := recover(); r != nil {
+			fmt.Printf("PANIC OCCURRED: %v\n", r)
 			log.Default().Error("Application panic during startup",
 				"panic", r,
 			)
@@ -32,8 +35,10 @@ func main() {
 	}()
 
 	// Start a new container.
+	fmt.Println("ABOUT TO INITIALIZE SERVICES CONTAINER")
 	log.Default().Info("Initializing services container...")
 	c := services.NewContainer()
+	fmt.Println("SERVICES CONTAINER INITIALIZED SUCCESSFULLY")
 	log.Default().Info("Services container initialized successfully")
 	defer func() {
 		// Gracefully shutdown all services.
