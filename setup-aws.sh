@@ -138,35 +138,148 @@ check_git() {
 
 # Function to check if GitHub CLI is installed
 check_github_cli() {
+    print_header "GitHub CLI Setup"
+    
     if ! command_exists gh; then
         print_warning "GitHub CLI not found. Installing GitHub CLI..."
         
         if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
             # Install GitHub CLI on Linux
             print_info "Installing GitHub CLI for Linux..."
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg >/dev/null 2>&1
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-            sudo apt update >/dev/null 2>&1 && sudo apt install gh -y >/dev/null 2>&1
-        elif [[ "$OSTYPE" == "darwin"* ]]; then
-            if command_exists brew; then
-                brew install gh
+            
+            # Step 1: Download and install GPG key
+            print_info "Step 1/4: Adding GitHub CLI GPG key..."
+            if curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null; then
+                print_success "GPG key added successfully"
             else
-                print_error "Please install GitHub CLI manually: https://cli.github.com/"
+                print_error "Failed to add GitHub CLI GPG key"
+                print_info "Error details: Check network connection and sudo permissions"
                 exit 1
             fi
+            
+            # Step 2: Add repository
+            print_info "Step 2/4: Adding GitHub CLI repository..."
+            if echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null; then
+                print_success "Repository added successfully"
+            else
+                print_error "Failed to add GitHub CLI repository"
+                exit 1
+            fi
+            
+            # Step 3: Update package list
+            print_info "Step 3/4: Updating package list..."
+            if sudo apt update 2>&1 | grep -q "github-cli"; then
+                print_success "Package list updated successfully"
+            else
+                print_warning "Package list updated (GitHub CLI repo may not be visible yet)"
+            fi
+            
+            # Step 4: Install GitHub CLI
+            print_info "Step 4/4: Installing GitHub CLI package..."
+            if sudo apt install gh -y 2>&1; then
+                print_success "GitHub CLI package installation completed"
+            else
+                print_error "Failed to install GitHub CLI package"
+                print_info "Trying alternative installation method..."
+                
+                # Alternative: Try downloading .deb directly
+                print_info "Downloading GitHub CLI .deb package directly..."
+                local gh_version="2.40.1"
+                local arch=$(dpkg --print-architecture)
+                local deb_url="https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_${arch}.deb"
+                
+                if curl -fsSL "$deb_url" -o "gh.deb"; then
+                    print_info "Installing downloaded package..."
+                    if sudo dpkg -i gh.deb 2>&1; then
+                        print_success "GitHub CLI package installed"
+                        
+                        # Try to fix dependencies, but don't fail if it has issues
+                        print_info "Attempting to fix dependencies..."
+                        if sudo apt-get install -f -y 2>&1; then
+                            print_success "Dependencies fixed successfully"
+                        else
+                            print_warning "Dependency fix had issues, but GitHub CLI may still work"
+                        fi
+                    else
+                        print_error "Failed to install GitHub CLI via direct download"
+                        rm -f gh.deb
+                        exit 1
+                    fi
+                    rm -f gh.deb
+                else
+                    print_error "Failed to download GitHub CLI package"
+                    exit 1
+                fi
+            fi
+            
+        elif [[ "$OSTYPE" == "darwin"* ]]; then
+            print_info "Installing GitHub CLI for macOS..."
+            if command_exists brew; then
+                print_info "Using Homebrew to install GitHub CLI..."
+                if brew install gh 2>&1; then
+                    print_success "GitHub CLI installed via Homebrew"
+                else
+                    print_error "Failed to install GitHub CLI via Homebrew"
+                    exit 1
+                fi
+            else
+                print_error "Homebrew not found. Please install GitHub CLI manually:"
+                print_info "Visit: https://cli.github.com/manual/installation"
+                exit 1
+            fi
+            
         else
-            print_error "Please install GitHub CLI manually: https://cli.github.com/"
+            print_error "Unsupported operating system: $OSTYPE"
+            print_info "Please install GitHub CLI manually:"
+            print_info "Visit: https://cli.github.com/manual/installation"
             exit 1
         fi
         
+        # Verify installation
+        print_info "Verifying GitHub CLI installation..."
+        
+        # Check if command exists
         if command_exists gh; then
-            print_success "GitHub CLI installed successfully"
+            print_success "GitHub CLI command found"
+            
+            # Test if it actually works
+            if gh_version_output=$(gh --version 2>&1); then
+                local gh_version=$(echo "$gh_version_output" | head -n1)
+                print_success "GitHub CLI installed and working!"
+                print_info "Version: $gh_version"
+            else
+                print_warning "GitHub CLI command exists but has issues"
+                print_info "Error: $gh_version_output"
+                print_info "Continuing anyway - it may work for basic operations"
+            fi
         else
-            print_error "GitHub CLI installation failed"
-            exit 1
+            print_error "GitHub CLI installation failed - command not found"
+            print_info "Checking if gh is in a different location..."
+            
+            # Check common alternative locations
+            if [[ -f "/usr/bin/gh" ]]; then
+                print_info "Found gh at /usr/bin/gh, adding to PATH"
+                export PATH="/usr/bin:$PATH"
+                if command_exists gh; then
+                    print_success "GitHub CLI now accessible"
+                fi
+            elif [[ -f "/usr/local/bin/gh" ]]; then
+                print_info "Found gh at /usr/local/bin/gh, adding to PATH"
+                export PATH="/usr/local/bin:$PATH"
+                if command_exists gh; then
+                    print_success "GitHub CLI now accessible"
+                fi
+            else
+                print_error "GitHub CLI not found in common locations"
+                print_info "Please try installing manually:"
+                print_info "Visit: https://cli.github.com/manual/installation"
+                exit 1
+            fi
         fi
     else
+        local gh_version=$(gh --version | head -n1)
         print_success "GitHub CLI is already installed"
+        print_info "Version: $gh_version"
     fi
 }
 
@@ -177,17 +290,41 @@ setup_github_repository() {
     # Check if we're in a git repository
     if [[ ! -d ".git" ]]; then
         print_info "Initializing Git repository..."
-        git init
-        git add .
-        git commit -m "Initial commit - GMFam application setup"
+        if git init 2>&1; then
+            print_success "Git repository initialized"
+        else
+            print_error "Failed to initialize Git repository"
+            exit 1
+        fi
+        
+        print_info "Adding files to Git..."
+        if git add . 2>&1; then
+            print_success "Files added to Git staging area"
+        else
+            print_error "Failed to add files to Git"
+            exit 1
+        fi
+        
+        print_info "Creating initial commit..."
+        if git commit -m "Initial commit - GMFam application setup" 2>&1; then
+            print_success "Initial commit created"
+        else
+            print_error "Failed to create initial commit"
+            exit 1
+        fi
     else
         print_success "Already in a Git repository"
         
         # Check if there are uncommitted changes
-        if ! git diff-index --quiet HEAD --; then
+        if ! git diff-index --quiet HEAD -- 2>/dev/null; then
             print_info "Found uncommitted changes, creating commit..."
-            git add .
-            git commit -m "Pre-deployment commit - $(date)"
+            if git add . 2>&1 && git commit -m "Pre-deployment commit - $(date)" 2>&1; then
+                print_success "Pre-deployment commit created"
+            else
+                print_warning "Failed to commit changes (may be no changes to commit)"
+            fi
+        else
+            print_info "No uncommitted changes found"
         fi
     fi
     
@@ -203,19 +340,27 @@ setup_github_repository() {
             exit 1
         fi
         
-        if ! gh auth login; then
+        print_info "Starting GitHub authentication..."
+        if gh auth login 2>&1; then
+            print_success "GitHub authentication successful!"
+        else
             print_error "GitHub authentication failed"
+            print_info "Please try running 'gh auth login' manually"
             exit 1
         fi
-        
-        print_success "GitHub authentication successful!"
     else
         print_success "GitHub CLI already authenticated"
     fi
     
     # Get the authenticated GitHub username
-    github_username=$(gh api user --jq '.login')
-    print_success "Authenticated as: $github_username"
+    print_info "Getting GitHub username..."
+    if github_username=$(gh api user --jq '.login' 2>&1); then
+        print_success "Authenticated as: $github_username"
+    else
+        print_error "Failed to get GitHub username"
+        print_info "Error: $github_username"
+        exit 1
+    fi
     
     # Update the repository full name
     repo_full_name="${github_username}/${github_repo}"
@@ -245,11 +390,13 @@ setup_github_repository() {
             visibility_flag="--public"
         fi
         
-        if gh repo create "$github_repo" --description "$repo_description" $visibility_flag --confirm >/dev/null 2>&1; then
+        print_info "Creating repository with GitHub CLI..."
+        if repo_create_output=$(gh repo create "$github_repo" --description "$repo_description" $visibility_flag --confirm 2>&1); then
             print_success "Repository created successfully"
             print_info "Repository URL: https://github.com/$repo_full_name"
         else
             print_error "Failed to create repository"
+            print_info "Error details: $repo_create_output"
             exit 1
         fi
     fi
@@ -261,18 +408,30 @@ setup_github_repository() {
     git remote remove origin 2>/dev/null || true
     
     # Add new origin
-    git remote add origin "https://github.com/$repo_full_name.git"
+    print_info "Adding GitHub remote..."
+    if git remote add origin "https://github.com/$repo_full_name.git" 2>&1; then
+        print_success "GitHub remote added successfully"
+    else
+        print_error "Failed to add GitHub remote"
+        exit 1
+    fi
     
     # Set up main branch
-    git branch -M main 2>/dev/null || true
+    print_info "Setting up main branch..."
+    if git branch -M main 2>&1; then
+        print_success "Main branch configured"
+    else
+        print_warning "Failed to rename branch to main (may already be main)"
+    fi
     
     # Push to repository
     print_info "Pushing code to GitHub repository..."
-    if git push -u origin main --force >/dev/null 2>&1; then
+    if push_output=$(git push -u origin main --force 2>&1); then
         print_success "Code pushed to GitHub successfully!"
         print_info "🔗 Repository: https://github.com/$repo_full_name"
     else
         print_error "Failed to push code to GitHub"
+        print_info "Error details: $push_output"
         print_info "Please check your GitHub permissions and try again"
         exit 1
     fi
@@ -307,23 +466,26 @@ set_github_secrets() {
         local value="${secrets_map[$key]}"
         
         print_info "Setting secret: $key"
-        if echo "$value" | gh secret set "$key" --repo "$repo_full_name" >/dev/null 2>&1; then
+        if secret_output=$(echo "$value" | gh secret set "$key" --repo "$repo_full_name" 2>&1); then
             print_success "✅ $key"
         else
-            print_warning "⚠️  Failed to set $key (may need manual setup)"
+            print_error "❌ Failed to set $key"
+            print_info "Error: $secret_output"
         fi
     done
     
     # Handle SSH key separately (multiline)
     print_info "Setting SSH key secret..."
     if [[ -f "${app_name}-key.pem" ]]; then
-        if gh secret set "LIGHTSAIL_SSH_KEY" --body-file "${app_name}-key.pem" --repo "$repo_full_name" >/dev/null 2>&1; then
+        if ssh_secret_output=$(gh secret set "LIGHTSAIL_SSH_KEY" --body-file "${app_name}-key.pem" --repo "$repo_full_name" 2>&1); then
             print_success "✅ LIGHTSAIL_SSH_KEY"
         else
-            print_warning "⚠️  Failed to set LIGHTSAIL_SSH_KEY (may need manual setup)"
+            print_error "❌ Failed to set LIGHTSAIL_SSH_KEY"
+            print_info "Error: $ssh_secret_output"
         fi
     else
-        print_warning "⚠️  SSH key file not found for secret setup"
+        print_error "❌ SSH key file not found: ${app_name}-key.pem"
+        print_info "This is required for deployment to work"
     fi
     
     print_success "GitHub secrets configuration completed!"
