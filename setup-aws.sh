@@ -955,8 +955,30 @@ create_github_iam_role() {
     
     local role_name="${app_name}-github-actions-role"
     local policy_name="${app_name}-github-actions-policy"
+    local account_id=$(aws sts get-caller-identity --query Account --output text)
+    
+    # Create OIDC provider for GitHub Actions if it doesn't exist
+    print_info "Setting up GitHub OIDC provider..."
+    local oidc_arn="arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
+    
+    if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$oidc_arn" >/dev/null 2>&1; then
+        print_success "GitHub OIDC provider already exists"
+    else
+        print_info "Creating GitHub OIDC provider..."
+        if aws iam create-open-id-connect-provider \
+            --url https://token.actions.githubusercontent.com \
+            --client-id-list sts.amazonaws.com \
+            --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1 1c58a3a8518e8759bf075b76b750d4f2df264fcd \
+            >/dev/null 2>&1; then
+            print_success "GitHub OIDC provider created successfully"
+        else
+            print_error "Failed to create GitHub OIDC provider"
+            exit 1
+        fi
+    fi
     
     # Create trust policy for GitHub OIDC
+    print_info "Creating IAM role trust policy..."
     cat > trust-policy.json << EOF
 {
     "Version": "2012-10-17",
@@ -964,7 +986,7 @@ create_github_iam_role() {
         {
             "Effect": "Allow",
             "Principal": {
-                "Federated": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):oidc-provider/token.actions.githubusercontent.com"
+                "Federated": "arn:aws:iam::${account_id}:oidc-provider/token.actions.githubusercontent.com"
             },
             "Action": "sts:AssumeRoleWithWebIdentity",
             "Condition": {
@@ -982,11 +1004,29 @@ EOF
     
     # Create IAM role
     print_info "Creating IAM role..."
-    aws iam create-role \
+    if aws iam create-role \
         --role-name "$role_name" \
         --assume-role-policy-document file://trust-policy.json \
         --tags Key=Application,Value=$app_name \
-        >/dev/null 2>&1 || print_warning "IAM role may already exist"
+        >/dev/null 2>&1; then
+        print_success "IAM role created successfully"
+    elif aws iam get-role --role-name "$role_name" >/dev/null 2>&1; then
+        print_success "IAM role already exists"
+        
+        # Update the trust policy in case the repository changed
+        print_info "Updating IAM role trust policy..."
+        if aws iam update-assume-role-policy \
+            --role-name "$role_name" \
+            --policy-document file://trust-policy.json \
+            >/dev/null 2>&1; then
+            print_success "IAM role trust policy updated"
+        else
+            print_warning "Failed to update trust policy, but role exists"
+        fi
+    else
+        print_error "Failed to create IAM role"
+        exit 1
+    fi
     
     # Create policy for Lightsail and basic AWS access
     cat > role-policy.json << EOF
@@ -1010,21 +1050,27 @@ EOF
 EOF
     
     # Attach policy to role
-    aws iam put-role-policy \
+    print_info "Attaching policy to IAM role..."
+    if aws iam put-role-policy \
         --role-name "$role_name" \
         --policy-name "$policy_name" \
         --policy-document file://role-policy.json \
-        >/dev/null 2>&1
+        >/dev/null 2>&1; then
+        print_success "Policy attached to IAM role successfully"
+    else
+        print_error "Failed to attach policy to IAM role"
+        exit 1
+    fi
     
     # Get role ARN
-    role_arn=$(aws iam get-role --role-name "$role_name" --query 'Role.Arn' --output text)
-    
-    # Create OIDC provider if it doesn't exist
-    aws iam create-open-id-connect-provider \
-        --url https://token.actions.githubusercontent.com \
-        --client-id-list sts.amazonaws.com \
-        --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1 \
-        >/dev/null 2>&1 || print_warning "OIDC provider may already exist"
+    print_info "Getting IAM role ARN..."
+    if role_arn=$(aws iam get-role --role-name "$role_name" --query 'Role.Arn' --output text 2>&1); then
+        print_success "IAM role ARN retrieved: $role_arn"
+    else
+        print_error "Failed to get IAM role ARN"
+        print_info "Error: $role_arn"
+        exit 1
+    fi
     
     # Clean up temporary files
     rm -f trust-policy.json role-policy.json
