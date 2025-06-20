@@ -28,7 +28,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-s -w" -o 
 FROM alpine:latest
 
 # Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata netcat-openbsd
+RUN apk --no-cache add ca-certificates tzdata python3
 
 # Create app user
 RUN adduser -D -s /bin/sh appuser
@@ -51,8 +51,8 @@ RUN mkdir -p /app/dbs /app/uploads && \
     chmod -R 755 /app && \
     chown -R appuser:appuser /app
 
-# Switch to app user
-USER appuser
+# Keep as root for debugging
+# USER appuser
 
 # Expose port
 EXPOSE 8000
@@ -61,5 +61,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1
 
-# Temporary debugging - run a simple HTTP server to test container infrastructure
-CMD ["sh", "-c", "echo 'Container startup initiated...' && echo 'Current user:' && whoami && echo 'Working directory:' && pwd && echo 'Directory contents:' && ls -la && echo 'Environment variables:' && env | grep PAGODA | sort && echo 'Testing with simple HTTP server...' && while true; do echo 'HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello World!\n' | nc -l -p 8000; done"]
+# Test with absolute minimal approach
+CMD ["sh", "-c", "echo 'CONTAINER STARTED' && sleep 30 && echo 'Starting HTTP server on port 8000' && python3 -m http.server 8000"]
