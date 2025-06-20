@@ -14,7 +14,7 @@ app:
   name: "gmfam"
   host: "http://:8000"
   environment: "prod"
-  encryptionKey: "pb6aR531sxlL9A3K4E4EF3DOt4Oudxs9"
+  encryptionKey: "LF5RRfUh8e8funzvsqKGNPVi7q0if4yJ"
   timeout: "20s"
   passwordToken:
       expiration: "60m"
@@ -28,7 +28,7 @@ cache:
 
 database:
   driver: "postgres"
-  connection: "postgres://dbuser:5r9eSPDctKK1QCMxNRNcJirOrXuEknq@gmfam-db.cezv0cuumplv.us-east-1.rds.amazonaws.com:5432/gmfam_prod?sslmode=require"
+  connection: "postgres://dbuser:uDfpdvyLP6I4a7GhFZseJKq2IpDcxIG@gmfam-db.cezv0cuumplv.us-east-1.rds.amazonaws.com:5432/gmfam_prod?sslmode=require"
   testConnection: "file:/?vfs=memdb&_timeout=1000&_fk=true"
 
 files:
