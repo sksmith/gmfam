@@ -40,7 +40,6 @@ COPY --from=builder /app/main .
 
 # Copy static files
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/static ./static
 
 # Create directories for app data
 RUN mkdir -p /app/dbs /app/uploads
