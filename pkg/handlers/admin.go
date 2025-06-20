@@ -56,7 +56,9 @@ func (h *Admin) Routes(g *echo.Group) {
 	ag := g.Group("/admin", middleware.RequireAdmin)
 
 	entities := ag.Group("/entity")
-	for _, n := range h.graph.Nodes {
+	// Only register entity routes if graph is available (development/test environments)
+	if h.graph != nil {
+		for _, n := range h.graph.Nodes {
 		ng := entities.Group(fmt.Sprintf("/%s", strings.ToLower(n.Name)))
 		ng.GET("", h.EntityList(n)).
 			Name = routenames.AdminEntityList(n.Name)
@@ -72,6 +74,7 @@ func (h *Admin) Routes(g *echo.Group) {
 			Name = routenames.AdminEntityDelete(n.Name)
 		ng.POST("/:id/delete", h.EntityDeleteSubmit(n), h.middlewareEntityLoad(n)).
 			Name = routenames.AdminEntityDeleteSubmit(n.Name)
+		}
 	}
 
 	tasks := ag.Group("/tasks")
@@ -193,6 +196,9 @@ func (h *Admin) EntityDeleteSubmit(n *gen.Type) echo.HandlerFunc {
 }
 
 func (h *Admin) getEntitySchema(n *gen.Type) *load.Schema {
+	if h.graph == nil {
+		return nil
+	}
 	for _, s := range h.graph.Schemas {
 		if s.Name == n.Name {
 			return s

@@ -49,9 +49,11 @@ func main() {
 	)
 
 	// Build the router.
+	log.Default().Info("Building router...")
 	if err := handlers.BuildRouter(c); err != nil {
 		fatal("failed to build the router", err)
 	}
+	log.Default().Info("Router built successfully")
 
 	// Temporarily disable task queues due to PostgreSQL 17 compatibility issues
 	// TODO: Fix backlite compatibility with PostgreSQL 17
@@ -59,6 +61,7 @@ func main() {
 	// c.Tasks.Start(context.Background())
 
 	// Start the server.
+	log.Default().Info("Starting HTTP server...")
 	go func() {
 		srv := http.Server{
 			Addr:         fmt.Sprintf("%s:%d", c.Config.HTTP.Hostname, c.Config.HTTP.Port),
