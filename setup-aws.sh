@@ -1,0 +1,1027 @@
+#!/bin/bash
+
+# AWS Infrastructure Setup Script for GMFam Application
+# This script creates all necessary AWS resources for deploying your application
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Script metadata
+SCRIPT_VERSION="1.0.0"
+APP_NAME="gmfam"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="/tmp/gmfam_setup_${TIMESTAMP}.log"
+
+# Function to print colored output
+print_header() {
+    echo -e "\n${BLUE}================================${NC}"
+    echo -e "${BLUE}$1${NC}"
+    echo -e "${BLUE}================================${NC}\n"
+}
+
+print_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+print_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+# Function to log commands
+log_command() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to prompt for user input
+prompt_user() {
+    local prompt="$1"
+    local var_name="$2"
+    local default_value="$3"
+    local is_sensitive="$4"
+    
+    if [[ -n "$default_value" ]]; then
+        prompt="$prompt (default: $default_value)"
+    fi
+    
+    echo -n "$prompt: "
+    
+    if [[ "$is_sensitive" == "true" ]]; then
+        read -s user_input
+        echo
+    else
+        read user_input
+    fi
+    
+    if [[ -z "$user_input" && -n "$default_value" ]]; then
+        user_input="$default_value"
+    fi
+    
+    eval "$var_name='$user_input'"
+}
+
+# Function to validate email format
+validate_email() {
+    local email="$1"
+    if [[ ! "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 1
+    fi
+    return 0
+}
+
+# Function to generate random password
+generate_password() {
+    openssl rand -base64 24 | tr -d "=+/" | head -c 32
+}
+
+# Function to generate encryption key
+generate_encryption_key() {
+    openssl rand -base64 32 | tr -d "=+/" | head -c 32
+}
+
+# Function to check if Git is installed
+check_git() {
+    if ! command_exists git; then
+        print_warning "Git not found. Installing Git..."
+        
+        if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
+            if command_exists apt-get; then
+                sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y git >/dev/null 2>&1
+            elif command_exists yum; then
+                sudo yum install -y git >/dev/null 2>&1
+            elif command_exists dnf; then
+                sudo dnf install -y git >/dev/null 2>&1
+            else
+                print_error "Please install Git manually"
+                exit 1
+            fi
+        elif [[ "$OSTYPE" == "darwin"* ]]; then
+            if command_exists brew; then
+                brew install git
+            else
+                print_error "Please install Git manually: https://git-scm.com/"
+                exit 1
+            fi
+        else
+            print_error "Please install Git manually: https://git-scm.com/"
+            exit 1
+        fi
+        
+        if command_exists git; then
+            print_success "Git installed successfully"
+        else
+            print_error "Git installation failed"
+            exit 1
+        fi
+    else
+        print_success "Git is already installed"
+    fi
+}
+
+# Function to check if GitHub CLI is installed
+check_github_cli() {
+    if ! command_exists gh; then
+        print_warning "GitHub CLI not found. Installing GitHub CLI..."
+        
+        if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
+            # Install GitHub CLI on Linux
+            print_info "Installing GitHub CLI for Linux..."
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg >/dev/null 2>&1
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update >/dev/null 2>&1 && sudo apt install gh -y >/dev/null 2>&1
+        elif [[ "$OSTYPE" == "darwin"* ]]; then
+            if command_exists brew; then
+                brew install gh
+            else
+                print_error "Please install GitHub CLI manually: https://cli.github.com/"
+                exit 1
+            fi
+        else
+            print_error "Please install GitHub CLI manually: https://cli.github.com/"
+            exit 1
+        fi
+        
+        if command_exists gh; then
+            print_success "GitHub CLI installed successfully"
+        else
+            print_error "GitHub CLI installation failed"
+            exit 1
+        fi
+    else
+        print_success "GitHub CLI is already installed"
+    fi
+}
+
+# Function to setup GitHub repository
+setup_github_repository() {
+    print_header "GitHub Repository Setup"
+    
+    # Check if we're in a git repository
+    if [[ ! -d ".git" ]]; then
+        print_info "Initializing Git repository..."
+        git init
+        git add .
+        git commit -m "Initial commit - GMFam application setup"
+    else
+        print_success "Already in a Git repository"
+        
+        # Check if there are uncommitted changes
+        if ! git diff-index --quiet HEAD --; then
+            print_info "Found uncommitted changes, creating commit..."
+            git add .
+            git commit -m "Pre-deployment commit - $(date)"
+        fi
+    fi
+    
+    # Check if GitHub CLI is authenticated
+    if ! gh auth status >/dev/null 2>&1; then
+        print_info "🔐 GitHub authentication required..."
+        print_info "This will open a web browser for secure authentication."
+        echo
+        prompt_user "Ready to authenticate with GitHub? (y/n)" "auth_ready" "y"
+        
+        if [[ "$auth_ready" != "y" ]]; then
+            print_error "GitHub authentication is required for automatic setup"
+            exit 1
+        fi
+        
+        if ! gh auth login; then
+            print_error "GitHub authentication failed"
+            exit 1
+        fi
+        
+        print_success "GitHub authentication successful!"
+    else
+        print_success "GitHub CLI already authenticated"
+    fi
+    
+    # Get the authenticated GitHub username
+    github_username=$(gh api user --jq '.login')
+    print_success "Authenticated as: $github_username"
+    
+    # Update the repository full name
+    repo_full_name="${github_username}/${github_repo}"
+    
+    # Check if repository already exists
+    if gh repo view "$repo_full_name" >/dev/null 2>&1; then
+        print_warning "Repository $repo_full_name already exists"
+        
+        prompt_user "Do you want to use the existing repository? (y/n)" "use_existing_repo" "y"
+        if [[ "$use_existing_repo" != "y" ]]; then
+            prompt_user "Enter a different repository name" "github_repo"
+            repo_full_name="${github_username}/${github_repo}"
+        fi
+    fi
+    
+    # Create repository if it doesn't exist
+    if ! gh repo view "$repo_full_name" >/dev/null 2>&1; then
+        print_info "Creating GitHub repository: $repo_full_name"
+        
+        prompt_user "Repository description" "repo_description" "GMFam application - Auto-deployed to AWS"
+        prompt_user "Make repository private? (y/n)" "make_private" "n"
+        
+        local visibility_flag=""
+        if [[ "$make_private" == "y" ]]; then
+            visibility_flag="--private"
+        else
+            visibility_flag="--public"
+        fi
+        
+        if gh repo create "$github_repo" --description "$repo_description" $visibility_flag --confirm >/dev/null 2>&1; then
+            print_success "Repository created successfully"
+            print_info "Repository URL: https://github.com/$repo_full_name"
+        else
+            print_error "Failed to create repository"
+            exit 1
+        fi
+    fi
+    
+    # Set up remote and push
+    print_info "Configuring Git remote..."
+    
+    # Remove existing origin if it exists
+    git remote remove origin 2>/dev/null || true
+    
+    # Add new origin
+    git remote add origin "https://github.com/$repo_full_name.git"
+    
+    # Set up main branch
+    git branch -M main 2>/dev/null || true
+    
+    # Push to repository
+    print_info "Pushing code to GitHub repository..."
+    if git push -u origin main --force >/dev/null 2>&1; then
+        print_success "Code pushed to GitHub successfully!"
+        print_info "🔗 Repository: https://github.com/$repo_full_name"
+    else
+        print_error "Failed to push code to GitHub"
+        print_info "Please check your GitHub permissions and try again"
+        exit 1
+    fi
+}
+
+# Function to set GitHub secrets automatically
+set_github_secrets() {
+    print_header "Setting GitHub Secrets"
+    
+    print_info "Configuring GitHub secrets for automated deployment..."
+    
+    # Build database connection string
+    local db_connection="postgres://${db_username}:${db_password}@${db_endpoint}:5432/${db_name}?sslmode=require"
+    
+    # Prepare secrets array
+    declare -A secrets_map=(
+        ["AWS_ARN_OIDC_ACCESS"]="$role_arn"
+        ["LIGHTSAIL_HOST"]="$lightsail_ip"
+        ["LIGHTSAIL_USER"]="ubuntu"
+        ["PAGODA_DATABASE_CONNECTION"]="$db_connection"
+        ["PAGODA_APP_HOST"]="http://${lightsail_ip}:8000"
+        ["PAGODA_APP_ENCRYPTIONKEY"]="$app_encryption_key"
+        ["PAGODA_MAIL_HOSTNAME"]="localhost"
+        ["PAGODA_MAIL_PORT"]="25"
+        ["PAGODA_MAIL_USER"]="$admin_email"
+        ["PAGODA_MAIL_PASSWORD"]="changeme123"
+        ["PAGODA_MAIL_FROMADDRESS"]="$admin_email"
+    )
+    
+    # Set each secret
+    for key in "${!secrets_map[@]}"; do
+        local value="${secrets_map[$key]}"
+        
+        print_info "Setting secret: $key"
+        if echo "$value" | gh secret set "$key" --repo "$repo_full_name" >/dev/null 2>&1; then
+            print_success "✅ $key"
+        else
+            print_warning "⚠️  Failed to set $key (may need manual setup)"
+        fi
+    done
+    
+    # Handle SSH key separately (multiline)
+    print_info "Setting SSH key secret..."
+    if [[ -f "${app_name}-key.pem" ]]; then
+        if gh secret set "LIGHTSAIL_SSH_KEY" --body-file "${app_name}-key.pem" --repo "$repo_full_name" >/dev/null 2>&1; then
+            print_success "✅ LIGHTSAIL_SSH_KEY"
+        else
+            print_warning "⚠️  Failed to set LIGHTSAIL_SSH_KEY (may need manual setup)"
+        fi
+    else
+        print_warning "⚠️  SSH key file not found for secret setup"
+    fi
+    
+    print_success "GitHub secrets configuration completed!"
+    print_info "🔗 Manage secrets: https://github.com/$repo_full_name/settings/secrets/actions"
+}
+
+# Function to install AWS CLI
+install_aws_cli() {
+    print_header "Installing AWS CLI"
+    
+    if command_exists aws; then
+        print_success "AWS CLI is already installed"
+        aws --version
+        return 0
+    fi
+    
+    print_info "AWS CLI not found. Installing AWS CLI..."
+    
+    # Detect OS and install accordingly
+    if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
+        print_info "Detected Linux - installing AWS CLI v2..."
+        
+        # Check for required tools
+        if ! command_exists curl; then
+            print_error "curl is required but not installed. Please install curl first."
+            exit 1
+        fi
+        
+        # Download AWS CLI
+        print_info "Downloading AWS CLI installer..."
+        curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        
+        if [[ ! -f "awscliv2.zip" ]]; then
+            print_error "Failed to download AWS CLI installer"
+            exit 1
+        fi
+        
+        # Extract using available tools
+        print_info "Extracting AWS CLI installer..."
+        if command_exists unzip; then
+            unzip -q awscliv2.zip
+        elif command_exists python3; then
+            python3 -m zipfile -e awscliv2.zip .
+        elif command_exists python; then
+            python -m zipfile -e awscliv2.zip .
+        else
+            print_error "No extraction tool available (unzip, python3, or python required)"
+            print_info "Please install unzip: sudo apt-get install unzip (Ubuntu/Debian)"
+            exit 1
+        fi
+        
+        # Make installer executable
+        chmod +x ./aws/install
+        
+        # Try to install without sudo first (for user install)
+        print_info "Installing AWS CLI to user directory..."
+        if ./aws/install --install-dir ~/.local/aws-cli --bin-dir ~/.local/bin >/dev/null 2>&1; then
+            print_success "AWS CLI installed to user directory"
+            export PATH="$HOME/.local/bin:$PATH"
+            
+            # Fix permissions on installed files
+            chmod +x ~/.local/bin/aws 2>/dev/null || true
+            chmod +x ~/.local/aws-cli/v2/current/bin/aws 2>/dev/null || true
+            
+        else
+            print_info "User installation failed, trying system-wide installation..."
+            if sudo ./aws/install >/dev/null 2>&1; then
+                print_success "AWS CLI installed system-wide"
+            else
+                print_error "Failed to install AWS CLI. Please install manually."
+                print_info "Visit: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+                print_info "Or try: sudo apt-get install awscli"
+                exit 1
+            fi
+        fi
+        
+        # Clean up
+        rm -rf aws awscliv2.zip
+        
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        print_info "Detected macOS - installing AWS CLI v2..."
+        
+        # Check if Homebrew is available
+        if command_exists brew; then
+            print_info "Using Homebrew to install AWS CLI..."
+            brew install awscli
+        else
+            # Use official installer
+            curl -s "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg"
+            
+            if [[ ! -f "AWSCLIV2.pkg" ]]; then
+                print_error "Failed to download AWS CLI installer"
+                exit 1
+            fi
+            
+            sudo installer -pkg AWSCLIV2.pkg -target /
+            rm AWSCLIV2.pkg
+        fi
+        
+    elif [[ "$OSTYPE" == "msys"* ]] || [[ "$OSTYPE" == "cygwin"* ]]; then
+        print_info "Detected Windows - please install AWS CLI manually"
+        print_info "Download from: https://awscli.amazonaws.com/AWSCLIV2.msi"
+        print_error "Windows installation requires manual steps"
+        exit 1
+        
+    else
+        print_error "Unsupported operating system: $OSTYPE"
+        print_info "Please install AWS CLI manually from:"
+        print_info "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+        exit 1
+    fi
+    
+    # Verify installation
+    if command_exists aws; then
+        print_success "AWS CLI installed successfully!"
+        aws --version
+    else
+        print_error "AWS CLI installation failed or not in PATH"
+        print_info "Try running: export PATH=\"\$HOME/.local/bin:\$PATH\""
+        print_info "Or restart your terminal and try again"
+        exit 1
+    fi
+}
+
+# Function to configure AWS credentials
+configure_aws() {
+    print_header "AWS Configuration"
+    
+    # Ensure AWS CLI is in PATH (in case it was just installed)
+    if [[ -d "$HOME/.local/bin" ]] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+    
+    # Check if AWS is already configured
+    if aws sts get-caller-identity >/dev/null 2>&1; then
+        print_success "AWS CLI is already configured"
+        local current_account=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
+        local current_region=$(aws configure get region 2>/dev/null)
+        local current_user=$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)
+        
+        echo "Current Configuration:"
+        echo "  Account: $current_account"
+        echo "  Region: $current_region"
+        echo "  User: $current_user"
+        echo
+        
+        prompt_user "Do you want to use this configuration? (y/n)" "use_existing" "y"
+        if [[ "$use_existing" == "y" ]]; then
+            aws_region="$current_region"
+            return 0
+        fi
+    fi
+    
+    echo
+    print_info "🔑 AWS Credentials Setup"
+    print_info "You'll need AWS credentials with administrative access."
+    echo
+    print_info "📋 To get your credentials:"
+    print_info "1. Go to AWS Console: https://console.aws.amazon.com"
+    print_info "2. Navigate to: IAM → Users → [Your Username] → Security Credentials"
+    print_info "3. Click 'Create Access Key' → 'Command Line Interface (CLI)'"
+    print_info "4. Copy the Access Key ID and Secret Access Key"
+    echo
+    print_warning "⚠️  Keep these credentials secure and never share them!"
+    echo
+    
+    # Get credentials with validation
+    while true; do
+        prompt_user "Enter your AWS Access Key ID" "aws_access_key_id"
+        
+        if [[ ${#aws_access_key_id} -ge 16 && "$aws_access_key_id" =~ ^[A-Z0-9]+$ ]]; then
+            break
+        else
+            print_error "Invalid Access Key ID format. Should be 16-20 uppercase letters and numbers."
+        fi
+    done
+    
+    while true; do
+        prompt_user "Enter your AWS Secret Access Key" "aws_secret_access_key" "" "true"
+        
+        if [[ ${#aws_secret_access_key} -ge 32 ]]; then
+            break
+        else
+            print_error "Invalid Secret Access Key. Should be at least 32 characters."
+        fi
+    done
+    
+    # Region selection with common options
+    echo
+    print_info "🌍 Choose your AWS region (closer to your users = better performance):"
+    echo "  1. us-east-1 (N. Virginia) - Default, cheapest"
+    echo "  2. us-west-2 (Oregon) - West Coast US"
+    echo "  3. eu-west-1 (Ireland) - Europe"
+    echo "  4. ap-southeast-1 (Singapore) - Asia Pacific"
+    echo "  5. Custom region"
+    echo
+    
+    prompt_user "Select region (1-5)" "region_choice" "1"
+    
+    case "$region_choice" in
+        1) aws_region="us-east-1" ;;
+        2) aws_region="us-west-2" ;;
+        3) aws_region="eu-west-1" ;;
+        4) aws_region="ap-southeast-1" ;;
+        5) prompt_user "Enter custom region (e.g., us-west-1)" "aws_region" "us-east-1" ;;
+        *) aws_region="us-east-1" ;;
+    esac
+    
+    print_info "Selected region: $aws_region"
+    
+    # Configure AWS CLI
+    print_info "Configuring AWS CLI..."
+    aws configure set aws_access_key_id "$aws_access_key_id"
+    aws configure set aws_secret_access_key "$aws_secret_access_key"
+    aws configure set default.region "$aws_region"
+    aws configure set default.output "json"
+    
+    # Test configuration
+    print_info "Testing AWS connection..."
+    if aws sts get-caller-identity >/dev/null 2>&1; then
+        print_success "AWS CLI configured successfully! ✅"
+        
+        local account=$(aws sts get-caller-identity --query Account --output text)
+        local user_arn=$(aws sts get-caller-identity --query Arn --output text)
+        
+        echo
+        echo "✅ Connected to AWS Account: $account"
+        echo "✅ User: $user_arn"
+        echo "✅ Region: $aws_region"
+        echo
+    else
+        print_error "AWS CLI configuration failed. Please check your credentials."
+        print_info "Common issues:"
+        print_info "- Incorrect Access Key ID or Secret Access Key"
+        print_info "- User doesn't have sufficient permissions"
+        print_info "- Network connectivity issues"
+        exit 1
+    fi
+}
+
+# Function to collect deployment configuration
+collect_deployment_config() {
+    print_header "Deployment Configuration"
+    
+    # Application settings
+    prompt_user "Enter your application name" "app_name" "$APP_NAME"
+    prompt_user "Enter your domain name (optional, leave empty for IP access)" "domain_name" ""
+    prompt_user "Enter your email address for notifications" "admin_email"
+    
+    # Validate email
+    while ! validate_email "$admin_email"; do
+        print_error "Invalid email format. Please try again."
+        prompt_user "Enter your email address for notifications" "admin_email"
+    done
+    
+    # GitHub repository settings (will be set during GitHub setup)
+    prompt_user "Enter your desired GitHub repository name" "github_repo" "$app_name"
+    
+    # Database settings
+    prompt_user "Enter database name" "db_name" "${app_name}_prod"
+    prompt_user "Enter database username" "db_username" "dbuser"
+    
+    # Generate secure passwords
+    db_password=$(generate_password)
+    app_encryption_key=$(generate_encryption_key)
+    
+    print_success "Configuration collected successfully"
+    
+    # Display configuration summary
+    print_header "Configuration Summary"
+    echo "Application Name: $app_name"
+    echo "Domain: ${domain_name:-"Will use IP address"}"
+    echo "Admin Email: $admin_email"
+    echo "GitHub Repository: $github_repo"
+    echo "Database: $db_name"
+    echo "Database User: $db_username"
+    echo "AWS Region: $aws_region"
+    echo
+    
+    prompt_user "Proceed with this configuration? (y/n)" "proceed" "y"
+    if [[ "$proceed" != "y" ]]; then
+        print_info "Deployment cancelled by user"
+        exit 0
+    fi
+}
+
+# Function to create RDS database
+create_database() {
+    print_header "Creating RDS Database"
+    
+    local db_instance_id="${app_name}-db"
+    local db_subnet_group_name="${app_name}-db-subnet-group"
+    local db_security_group_name="${app_name}-db-sg"
+    
+    # Create VPC and networking (simplified - using default VPC)
+    local vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query 'Vpcs[0].VpcId' --output text)
+    
+    if [[ "$vpc_id" == "None" ]]; then
+        print_error "No default VPC found. Please create a VPC first."
+        exit 1
+    fi
+    
+    # Get subnet IDs
+    local subnet_ids=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[].SubnetId' --output text)
+    
+    # Create DB subnet group
+    print_info "Creating DB subnet group..."
+    aws rds create-db-subnet-group \
+        --db-subnet-group-name "$db_subnet_group_name" \
+        --db-subnet-group-description "Subnet group for $app_name database" \
+        --subnet-ids $subnet_ids \
+        --tags Key=Application,Value=$app_name \
+        >/dev/null 2>&1 || print_warning "DB subnet group may already exist"
+    
+    # Create security group for database
+    print_info "Creating database security group..."
+    local db_sg_id=$(aws ec2 create-security-group \
+        --group-name "$db_security_group_name" \
+        --description "Security group for $app_name database" \
+        --vpc-id "$vpc_id" \
+        --query 'GroupId' --output text 2>/dev/null || \
+        aws ec2 describe-security-groups --group-names "$db_security_group_name" --query 'SecurityGroups[0].GroupId' --output text)
+    
+    # Allow MySQL/PostgreSQL access from application
+    aws ec2 authorize-security-group-ingress \
+        --group-id "$db_sg_id" \
+        --protocol tcp \
+        --port 5432 \
+        --cidr 10.0.0.0/8 \
+        >/dev/null 2>&1 || true
+    
+    # Check if RDS instance already exists
+    if aws rds describe-db-instances --db-instance-identifier "$db_instance_id" >/dev/null 2>&1; then
+        print_success "RDS instance already exists"
+        local existing_status=$(aws rds describe-db-instances --db-instance-identifier "$db_instance_id" --query 'DBInstances[0].DBInstanceStatus' --output text)
+        print_info "Current status: $existing_status"
+        
+        if [[ "$existing_status" != "available" ]]; then
+            print_info "Waiting for existing RDS instance to become available..."
+            aws rds wait db-instance-available --db-instance-identifier "$db_instance_id"
+        fi
+    else
+        # Create RDS instance
+        print_info "Creating RDS PostgreSQL instance (this may take 10-15 minutes)..."
+        
+        if aws rds create-db-instance \
+            --db-instance-identifier "$db_instance_id" \
+            --db-instance-class "db.t3.micro" \
+            --engine "postgres" \
+            --engine-version "17.5" \
+            --master-username "$db_username" \
+            --master-user-password "$db_password" \
+            --allocated-storage 20 \
+            --storage-type "gp2" \
+            --vpc-security-group-ids "$db_sg_id" \
+            --db-subnet-group-name "$db_subnet_group_name" \
+            --db-name "$db_name" \
+            --backup-retention-period 7 \
+            --storage-encrypted \
+            --tags Key=Application,Value=$app_name \
+            --no-multi-az \
+            --no-publicly-accessible \
+            >/dev/null 2>&1; then
+            
+            print_success "RDS instance creation initiated"
+            print_info "Waiting for RDS instance to become available..."
+            aws rds wait db-instance-available --db-instance-identifier "$db_instance_id"
+        else
+            print_error "Failed to create RDS instance"
+            print_info "Checking what went wrong..."
+            
+            # Try to get more specific error information
+            aws rds create-db-instance \
+                --db-instance-identifier "$db_instance_id" \
+                --db-instance-class "db.t3.micro" \
+                --engine "postgres" \
+                --engine-version "17.5" \
+                --master-username "$db_username" \
+                --master-user-password "$db_password" \
+                --allocated-storage 20 \
+                --storage-type "gp2" \
+                --vpc-security-group-ids "$db_sg_id" \
+                --db-subnet-group-name "$db_subnet_group_name" \
+                --db-name "$db_name" \
+                --backup-retention-period 7 \
+                --storage-encrypted \
+                --tags Key=Application,Value=$app_name \
+                --no-multi-az \
+                --no-publicly-accessible 2>&1
+            
+            exit 1
+        fi
+    fi
+    
+    # Get RDS endpoint
+    db_endpoint=$(aws rds describe-db-instances \
+        --db-instance-identifier "$db_instance_id" \
+        --query 'DBInstances[0].Endpoint.Address' \
+        --output text)
+    
+    print_success "RDS database created successfully"
+    print_info "Database endpoint: $db_endpoint"
+}
+
+# Function to create Lightsail instance
+create_lightsail_instance() {
+    print_header "Creating Lightsail Instance"
+    
+    local instance_name="${app_name}-server"
+    local blueprint_id="ubuntu_20_04"
+    local bundle_id="micro_2_0"  # $3.50/month
+    
+    # Create Lightsail instance
+    print_info "Creating Lightsail instance..."
+    aws lightsail create-instances \
+        --instance-names "$instance_name" \
+        --availability-zone "${aws_region}a" \
+        --blueprint-id "$blueprint_id" \
+        --bundle-id "$bundle_id" \
+        --tags key=Application,value=$app_name \
+        >/dev/null 2>&1 || print_warning "Lightsail instance may already exist"
+    
+    # Wait for instance to be running
+    print_info "Waiting for Lightsail instance to be running..."
+    while true; do
+        local state=$(aws lightsail get-instance --instance-name "$instance_name" --query 'instance.state.name' --output text 2>/dev/null || echo "pending")
+        if [[ "$state" == "running" ]]; then
+            break
+        fi
+        echo -n "."
+        sleep 10
+    done
+    echo
+    
+    # Get instance IP
+    lightsail_ip=$(aws lightsail get-instance \
+        --instance-name "$instance_name" \
+        --query 'instance.publicIpAddress' \
+        --output text)
+    
+    # Open firewall ports
+    print_info "Configuring firewall..."
+    aws lightsail put-instance-port-info \
+        --instance-name "$instance_name" \
+        --port-infos fromPort=22,toPort=22,protocol=TCP \
+        --port-infos fromPort=80,toPort=80,protocol=TCP \
+        --port-infos fromPort=443,toPort=443,protocol=TCP \
+        --port-infos fromPort=8000,toPort=8000,protocol=TCP \
+        >/dev/null 2>&1
+    
+    # Generate SSH key pair
+    print_info "Creating SSH key pair..."
+    aws lightsail create-key-pair \
+        --key-pair-name "${app_name}-key" \
+        --query 'privateKeyBase64' \
+        --output text | base64 -d > "${app_name}-key.pem"
+    chmod 600 "${app_name}-key.pem"
+    
+    print_success "Lightsail instance created successfully"
+    print_info "Instance IP: $lightsail_ip"
+    print_info "SSH key saved as: ${app_name}-key.pem"
+}
+
+# Function to create IAM role for GitHub Actions
+create_github_iam_role() {
+    print_header "Creating IAM Role for GitHub Actions"
+    
+    local role_name="${app_name}-github-actions-role"
+    local policy_name="${app_name}-github-actions-policy"
+    
+    # Create trust policy for GitHub OIDC
+    cat > trust-policy.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):oidc-provider/token.actions.githubusercontent.com"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringEquals": {
+                    "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+                },
+                "StringLike": {
+                    "token.actions.githubusercontent.com:sub": "repo:${github_username}/${github_repo}:*"
+                }
+            }
+        }
+    ]
+}
+EOF
+    
+    # Create IAM role
+    print_info "Creating IAM role..."
+    aws iam create-role \
+        --role-name "$role_name" \
+        --assume-role-policy-document file://trust-policy.json \
+        --tags Key=Application,Value=$app_name \
+        >/dev/null 2>&1 || print_warning "IAM role may already exist"
+    
+    # Create policy for Lightsail and basic AWS access
+    cat > role-policy.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "lightsail:*",
+                "ec2:DescribeInstances",
+                "ec2:DescribeImages",
+                "ec2:DescribeSnapshots",
+                "ec2:DescribeKeyPairs",
+                "rds:DescribeDBInstances"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+    
+    # Attach policy to role
+    aws iam put-role-policy \
+        --role-name "$role_name" \
+        --policy-name "$policy_name" \
+        --policy-document file://role-policy.json \
+        >/dev/null 2>&1
+    
+    # Get role ARN
+    role_arn=$(aws iam get-role --role-name "$role_name" --query 'Role.Arn' --output text)
+    
+    # Create OIDC provider if it doesn't exist
+    aws iam create-open-id-connect-provider \
+        --url https://token.actions.githubusercontent.com \
+        --client-id-list sts.amazonaws.com \
+        --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1 \
+        >/dev/null 2>&1 || print_warning "OIDC provider may already exist"
+    
+    # Clean up temporary files
+    rm -f trust-policy.json role-policy.json
+    
+    print_success "IAM role created successfully"
+    print_info "Role ARN: $role_arn"
+}
+
+
+# Function to setup production config
+setup_production_config() {
+    print_header "Setting Up Production Configuration"
+    
+    # Create production config file
+    cat > config/config.prod.yaml << EOF
+http:
+  hostname: ""
+  port: 8000
+  readTimeout: "5s"
+  writeTimeout: "10s"
+  idleTimeout: "2m"
+  shutdownTimeout: "10s"
+  tls:
+    enabled: false
+    certificate: ""
+    key: ""
+
+app:
+  name: "$app_name"
+  host: "http://${lightsail_ip}:8000"
+  environment: "prod"
+  encryptionKey: "$app_encryption_key"
+  timeout: "20s"
+  passwordToken:
+      expiration: "60m"
+      length: 64
+  emailVerificationTokenExpiration: "12h"
+
+cache:
+  capacity: 100000
+  expiration:
+    publicFile: "4380h"
+
+database:
+  driver: "postgres"
+  connection: "postgres://${db_username}:${db_password}@${db_endpoint}:5432/${db_name}?sslmode=require"
+  testConnection: "file:/$RAND?vfs=memdb&_timeout=1000&_fk=true"
+
+files:
+  directory: "uploads"
+
+tasks:
+  goroutines: 1
+  releaseAfter: "15m"
+  cleanupInterval: "1h"
+  shutdownTimeout: "10s"
+
+mail:
+  hostname: "localhost"
+  port: 25
+  user: "$admin_email"
+  password: "admin"
+  fromAddress: "$admin_email"
+EOF
+    
+    print_success "Production configuration created: config/config.prod.yaml"
+}
+
+# Function to generate deployment summary
+generate_summary() {
+    print_header "Deployment Summary"
+    
+    print_success "AWS infrastructure setup completed successfully!"
+    echo
+    echo "Resources Created:"
+    echo "=================="
+    echo "✅ GitHub Repository: https://github.com/$repo_full_name"
+    echo "✅ Lightsail Instance: ${lightsail_ip}"
+    echo "✅ RDS PostgreSQL Database: ${db_endpoint}"
+    echo "✅ IAM Role for GitHub Actions: ${role_arn}"
+    echo "✅ SSH Key Pair: ${app_name}-key.pem"
+    echo "✅ Production Configuration: config/config.prod.yaml"
+    echo "✅ GitHub Secrets: Automatically configured"
+    echo
+    echo "🚀 Your Application is Ready!"
+    echo "=========================="
+    echo "1. ✅ Code pushed to GitHub repository"
+    echo "2. ✅ GitHub secrets configured automatically"
+    echo "3. ✅ AWS infrastructure provisioned"
+    echo "4. ⏳ GitHub Actions will deploy your app automatically"
+    echo "5. 🌐 Your app will be available at: http://${lightsail_ip}:8000"
+    echo
+    echo "📊 Monitor your deployment:"
+    echo "- GitHub Actions: https://github.com/$repo_full_name/actions"
+    echo "- Application URL: http://${lightsail_ip}:8000"
+    echo "- AWS Console: https://console.aws.amazon.com"
+    echo
+    echo "Important Files:"
+    echo "==============="
+    echo "- SSH Key: ${app_name}-key.pem (keep this secure!)"
+    echo "- Setup Log: $LOG_FILE"
+    echo
+    print_warning "Keep your SSH key and database credentials secure!"
+    
+    # Estimated costs
+    echo "Estimated Monthly Costs:"
+    echo "======================="
+    echo "- Lightsail Instance (micro): ~$3.50/month"
+    echo "- RDS PostgreSQL (db.t3.micro): ~$15/month"
+    echo "- Data Transfer: ~$0.50/month"
+    echo "- Total: ~$19/month"
+    echo
+}
+
+# Function to clean up on error
+cleanup_on_error() {
+    print_error "An error occurred during setup. Check the log file: $LOG_FILE"
+    exit 1
+}
+
+# Main execution
+main() {
+    # Set up error handling
+    trap cleanup_on_error ERR
+    
+    # Start logging
+    log_command "Starting AWS setup for $APP_NAME"
+    
+    print_header "GMFam AWS Infrastructure Setup"
+    echo "Version: $SCRIPT_VERSION"
+    echo "Log file: $LOG_FILE"
+    echo
+    
+    print_warning "This script will create AWS resources that incur costs (~$19/month)"
+    print_warning "Make sure you understand the costs before proceeding"
+    echo
+    prompt_user "Do you want to continue? (y/n)" "continue_setup" "y"
+    
+    if [[ "$continue_setup" != "y" ]]; then
+        print_info "Setup cancelled by user"
+        exit 0
+    fi
+    
+    # Execute setup steps
+    install_aws_cli
+    configure_aws
+    collect_deployment_config
+    check_git
+    check_github_cli
+    setup_github_repository
+    create_database
+    create_lightsail_instance
+    create_github_iam_role
+    setup_production_config
+    set_github_secrets
+    generate_summary
+    
+    print_success "Setup completed successfully! 🎉"
+}
+
+# Execute main function
+main "$@"

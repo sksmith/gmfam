@@ -3,16 +3,21 @@ name: Deploy to AWS Lightsail
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 env:
   GO_VERSION: "1.21"
   APP_NAME: "gmfam"
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
-  deploy:
+  integration:
     runs-on: ubuntu-latest
-    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -33,9 +38,7 @@ jobs:
     - name: Install dependencies and generate code
       run: |
         go mod download
-        # Install ent code generator if needed
         go install entgo.io/ent/cmd/ent@latest
-        # Generate ent code (if not already generated)
         go generate ./...
 
     - name: Run tests
@@ -43,9 +46,60 @@ jobs:
 
     - name: Build application
       run: |
-        # Build with all dependencies embedded
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -tags production -ldflags="-s -w" -o ${{ env.APP_NAME }} ./cmd/web
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: integration
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ARN_OIDC_ACCESS }}
+        role-session-name: Github-${{ github.run_number }}
+        aws-region: us-east-1
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Install dependencies and generate code
+      run: |
+        go mod download
+        go install entgo.io/ent/cmd/ent@latest
+        go generate ./...
+
+    - name: Build application
+      run: |
         CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -tags production -ldflags="-s -w" -o ${{ env.APP_NAME }} ./cmd/web
         chmod +x ${{ env.APP_NAME }}
+        
+        # Validate binary was created and is executable
+        if [ ! -f "${{ env.APP_NAME }}" ]; then
+          echo "Error: Binary not found after build"
+          exit 1
+        fi
+        
+        if [ ! -x "${{ env.APP_NAME }}" ]; then
+          echo "Error: Binary is not executable"
+          exit 1
+        fi
+        
+        echo "Build successful: $(ls -la ${{ env.APP_NAME }})"
 
     - name: Create deployment package
       run: |
@@ -70,24 +124,48 @@ jobs:
         RestartSec=5
         Environment=PAGODA_APP_ENVIRONMENT=production
         Environment=PAGODA_HTTP_PORT=8000
-        Environment=PAGODA_APP_HOST=${{ secrets.APP_HOST }}
-        Environment=PAGODA_ORM_AUTO_MIGRATE=false
+        Environment=PAGODA_APP_HOST=${{ secrets.PAGODA_APP_HOST }}
+        Environment=PAGODA_ORM_AUTO_MIGRATE=true
+        Environment=PAGODA_DATABASE_DRIVER=postgres
+        Environment=PAGODA_DATABASE_CONNECTION=${{ secrets.PAGODA_DATABASE_CONNECTION }}
+        Environment=PAGODA_APP_ENCRYPTIONKEY=${{ secrets.PAGODA_APP_ENCRYPTIONKEY }}
+        Environment=PAGODA_MAIL_HOSTNAME=${{ secrets.PAGODA_MAIL_HOSTNAME }}
+        Environment=PAGODA_MAIL_PORT=${{ secrets.PAGODA_MAIL_PORT }}
+        Environment=PAGODA_MAIL_USER=${{ secrets.PAGODA_MAIL_USER }}
+        Environment=PAGODA_MAIL_PASSWORD=${{ secrets.PAGODA_MAIL_PASSWORD }}
+        Environment=PAGODA_MAIL_FROMADDRESS=${{ secrets.PAGODA_MAIL_FROMADDRESS }}
 
         [Install]
         WantedBy=multi-user.target
         EOF
         
-        # Create deployment script
+        # Create deployment script with improved error handling
         cat > deploy/deploy.sh << 'EOF'
         #!/bin/bash
         set -e
         
         APP_NAME=$1
         DEPLOY_DIR="/opt/$APP_NAME"
+        BACKUP_DIR="/opt/$APP_NAME.backup"
         
         echo "Starting deployment of $APP_NAME..."
+        echo "Deployment ID: ${GITHUB_RUN_NUMBER:-unknown}"
+        
+        # Create backup of current deployment
+        if [ -d "$DEPLOY_DIR" ]; then
+          echo "Creating backup of current deployment..."
+          sudo rm -rf $BACKUP_DIR || true
+          sudo cp -r $DEPLOY_DIR $BACKUP_DIR
+        fi
+        
+        # Validate uploaded files exist
+        if [ ! -f "/tmp/$APP_NAME" ]; then
+          echo "Error: Application binary not found in /tmp/"
+          exit 1
+        fi
         
         # Stop the service if it's running
+        echo "Stopping service..."
         sudo systemctl stop $APP_NAME || true
         
         # Create application directory
@@ -95,6 +173,7 @@ jobs:
         sudo mkdir -p $DEPLOY_DIR/dbs
         
         # Copy application files
+        echo "Deploying application files..."
         sudo cp /tmp/$APP_NAME $DEPLOY_DIR/
         sudo cp -r /tmp/public $DEPLOY_DIR/ 2>/dev/null || true
         sudo cp -r /tmp/static $DEPLOY_DIR/ 2>/dev/null || true
@@ -104,18 +183,40 @@ jobs:
         sudo chown -R ubuntu:ubuntu $DEPLOY_DIR
         
         # Install systemd service
+        echo "Installing systemd service..."
         sudo cp /tmp/$APP_NAME.service /etc/systemd/system/
         sudo systemctl daemon-reload
         sudo systemctl enable $APP_NAME
         
         # Start the service
+        echo "Starting service..."
         sudo systemctl start $APP_NAME
         
-        # Wait a moment and check status
-        sleep 5
-        sudo systemctl status $APP_NAME --no-pager || true
+        # Wait and validate service is running
+        echo "Validating deployment..."
+        sleep 10
         
+        if ! sudo systemctl is-active --quiet $APP_NAME; then
+          echo "Error: Service failed to start, rolling back..."
+          sudo systemctl stop $APP_NAME || true
+          
+          if [ -d "$BACKUP_DIR" ]; then
+            sudo rm -rf $DEPLOY_DIR
+            sudo mv $BACKUP_DIR $DEPLOY_DIR
+            sudo systemctl start $APP_NAME || true
+          fi
+          
+          echo "Rollback completed. Check service logs:"
+          sudo journalctl -u $APP_NAME --no-pager -n 20
+          exit 1
+        fi
+        
+        sudo systemctl status $APP_NAME --no-pager
         echo "Deployment completed successfully!"
+        echo "Service is running and healthy"
+        
+        # Clean up backup on successful deployment
+        sudo rm -rf $BACKUP_DIR || true
         EOF
         
         chmod +x deploy/deploy.sh
@@ -139,22 +240,69 @@ jobs:
         key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
         port: 22
         timeout: 60s
-        command_timeout: 10m
+        command_timeout: 15m
         script: |
           # List files to debug
           echo "Files in /tmp:"
           ls -la /tmp/
           
+          # Set environment variables for deployment script
+          export GITHUB_RUN_NUMBER=${{ github.run_number }}
+          
           # Make sure deploy.sh is executable and run it
           chmod +x /tmp/deploy.sh
           /tmp/deploy.sh ${{ env.APP_NAME }}
           
-          # Clean up
+          # Clean up temporary files
+          echo "Cleaning up temporary files..."
           rm -f /tmp/deploy.sh /tmp/${{ env.APP_NAME }} /tmp/${{ env.APP_NAME }}.service
           rm -rf /tmp/public /tmp/static
           rm -f /tmp/config.yaml
+          
+          echo "Deployment script completed successfully"
 
-    - name: Health check
+    - name: Health check with retry logic
       run: |
-        sleep 10
-        curl -f http://${{ secrets.LIGHTSAIL_HOST }}:8000/ || echo "Health check failed, but deployment may still be successful"
+        echo "Starting health check..."
+        HEALTH_URL="http://${{ secrets.LIGHTSAIL_HOST }}:8000/"
+        MAX_ATTEMPTS=10
+        RETRY_INTERVAL=15
+        
+        for i in $(seq 1 $MAX_ATTEMPTS); do
+          echo "Health check attempt $i/$MAX_ATTEMPTS..."
+          
+          if curl -f --max-time 10 --retry 3 --retry-delay 2 "$HEALTH_URL"; then
+            echo "✅ Health check passed on attempt $i"
+            echo "🚀 Deployment completed successfully!"
+            echo "Application is available at: $HEALTH_URL"
+            exit 0
+          else
+            echo "❌ Health check failed on attempt $i"
+            if [ $i -lt $MAX_ATTEMPTS ]; then
+              echo "Waiting ${RETRY_INTERVAL}s before next attempt..."
+              sleep $RETRY_INTERVAL
+            fi
+          fi
+        done
+        
+        echo "🚨 Health check failed after $MAX_ATTEMPTS attempts"
+        echo "Deployment may have issues. Check application logs."
+        exit 1
+
+    - name: Deployment summary
+      if: always()
+      run: |
+        echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Application**: ${{ env.APP_NAME }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Run Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Host**: ${{ secrets.LIGHTSAIL_HOST }}" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "- **Status**: ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: http://${{ secrets.LIGHTSAIL_HOST }}:8000/" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **Status**: ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+        fi
