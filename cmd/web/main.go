@@ -43,11 +43,10 @@ func main() {
 		fatal("failed to build the router", err)
 	}
 
-	// Register all task queues.
-	tasks.Register(c)
-
-	// Start the task runner to execute queued tasks.
-	c.Tasks.Start(context.Background())
+	// Temporarily disable task queues due to PostgreSQL 17 compatibility issues
+	// TODO: Fix backlite compatibility with PostgreSQL 17
+	// tasks.Register(c)
+	// c.Tasks.Start(context.Background())
 
 	// Start the server.
 	go func() {

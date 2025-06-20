@@ -5,12 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"math/rand"
-	"os"
 	"path"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"entgo.io/ent/entc"
@@ -249,30 +246,14 @@ func (c *Container) initTasks() {
 		panic(fmt.Sprintf("failed to create task client: %v", err))
 	}
 
-	if err = c.Tasks.Install(); err != nil {
-		panic(fmt.Sprintf("failed to install task schema: %v", err))
-	}
+	// Temporarily disable task schema installation due to PostgreSQL 17 compatibility
+	// TODO: Fix backlite compatibility with PostgreSQL 17
+	// if err = c.Tasks.Install(); err != nil {
+	// 	panic(fmt.Sprintf("failed to install task schema: %v", err))
+	// }
 }
 
 // openDB opens a database connection.
 func openDB(driver, connection string) (*sql.DB, error) {
-	if driver == "sqlite3" {
-		// Helper to automatically create the directories that the specified sqlite file
-		// should reside in, if one.
-		d := strings.Split(connection, "/")
-		if len(d) > 1 {
-			dirpath := strings.Join(d[:len(d)-1], "/")
-
-			if err := os.MkdirAll(dirpath, 0755); err != nil {
-				return nil, err
-			}
-		}
-
-		// Check if a random value is required, which is often used for in-memory test databases.
-		if strings.Contains(connection, "$RAND") {
-			connection = strings.Replace(connection, "$RAND", fmt.Sprint(rand.Int()), 1)
-		}
-	}
-
 	return sql.Open(driver, connection)
 }
