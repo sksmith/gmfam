@@ -128,8 +128,8 @@ jobs:
               \"path\": \"/\",
               \"intervalSeconds\": 30,
               \"timeoutSeconds\": 10,
-              \"unhealthyThresholdCount\": 5,
-              \"healthyThresholdCount\": 2
+              \"unhealthyThreshold\": 5,
+              \"healthyThreshold\": 2
             }
           }"
 
