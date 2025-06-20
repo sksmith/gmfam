@@ -224,15 +224,22 @@ func (c *Container) initORM() {
 	}
 	log.Default().Info("Database migrations completed")
 
-	// Load the graph.
-	_, b, _, _ := runtime.Caller(0)
-	d := path.Join(path.Dir(b))
-	p := filepath.Join(filepath.Dir(d), "../ent/schema")
-	g, err := entc.LoadGraph(p, &gen.Config{})
-	if err != nil {
-		panic(err)
+	// Load the graph (only load in test environment to avoid Go dependency).
+	if c.Config.App.Environment == config.EnvTest {
+		_, b, _, _ := runtime.Caller(0)
+		d := path.Join(path.Dir(b))
+		p := filepath.Join(filepath.Dir(d), "../ent/schema")
+		g, err := entc.LoadGraph(p, &gen.Config{})
+		if err != nil {
+			log.Default().Error("Failed to load graph", "error", err)
+			c.Graph = nil
+		} else {
+			c.Graph = g
+		}
+	} else {
+		log.Default().Info("Skipping graph loading in non-test environment")
+		c.Graph = nil
 	}
-	c.Graph = g
 }
 
 // initAuth initializes the authentication client.

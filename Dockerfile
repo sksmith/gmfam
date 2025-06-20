@@ -61,5 +61,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1
 
-# Test basic container functionality first
-CMD ["sh", "-c", "echo 'CONTAINER STARTING NOW' && sleep 5 && echo 'ABOUT TO CHECK BINARY' && ls -la ./main && echo 'ABOUT TO RUN BINARY' && ./main || (echo 'BINARY FAILED, SLEEPING FOR DEBUG' && sleep 900)"]
+# Run the application
+CMD ["./main"]
