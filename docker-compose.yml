@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gmfam-app
+    ports:
+      - "8000:8000"
+    environment:
+      # Override config values using PAGODA_ prefix
+      PAGODA_APP_ENVIRONMENT: "local"
+      PAGODA_DATABASE_CONNECTION: "postgres://gmfam:gmfam123@postgres:5432/gmfam?sslmode=disable"
+      PAGODA_HTTP_HOSTNAME: "localhost"
+      PAGODA_HTTP_PORT: 8000
+      PAGODA_APP_ENCRYPTIONKEY: "development-key-change-in-production"
+      # Add explicit logging level
+      LOG_LEVEL: "DEBUG"
+    volumes:
+      # Mount config files for easy editing
+      - ./config:/app/config:ro
+      # Mount for hot reload if needed (optional)
+      # - ./:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - gmfam-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: gmfam-postgres
+    environment:
+      POSTGRES_DB: gmfam
+      POSTGRES_USER: gmfam
+      POSTGRES_PASSWORD: gmfam123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - gmfam-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gmfam"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+
+networks:
+  gmfam-network:
+    driver: bridge

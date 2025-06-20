@@ -1,0 +1,55 @@
+# Git files
+.git
+.gitignore
+
+# Docker files
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Development files
+.air.toml
+*.log
+*.tmp
+
+# Database files
+dbs/
+*.db
+*.sqlite
+*.sqlite3
+
+# Test files
+*_test.go
+testdata/
+
+# Documentation
+README.md
+docs/
+*.md
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/bin/
+/dist/
+/build/
+*.exe
+
+# Node modules (if any)
+node_modules/
+
+# Environment files
+.env
+.env.*
+
+# Temporary files
+tmp/
+temp/

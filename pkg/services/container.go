@@ -17,7 +17,6 @@ import (
 	"entgo.io/ent/entc/gen"
 	"github.com/labstack/echo/v4"
 	_ "github.com/lib/pq"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/mikestefanello/backlite"
 	"github.com/mikestefanello/pagoda/config"
 	"github.com/mikestefanello/pagoda/ent"
@@ -163,10 +162,21 @@ func (c *Container) initDatabase() {
 		connection = c.Config.Database.Connection
 	}
 
+	log.Default().Info("Initializing database connection",
+		"driver", c.Config.Database.Driver,
+		"environment", c.Config.App.Environment,
+	)
+
 	c.Database, err = openDB(c.Config.Database.Driver, connection)
 	if err != nil {
+		log.Default().Error("Failed to connect to database",
+			"driver", c.Config.Database.Driver,
+			"error", err,
+		)
 		panic(err)
 	}
+
+	log.Default().Info("Database connection established")
 }
 
 // initFiles initializes the file system.
@@ -190,9 +200,12 @@ func (c *Container) initORM() {
 	c.ORM = ent.NewClient(ent.Driver(drv))
 
 	// Run the auto migration tool.
+	log.Default().Info("Running database migrations")
 	if err := c.ORM.Schema.Create(context.Background()); err != nil {
+		log.Default().Error("Failed to run database migrations", "error", err)
 		panic(err)
 	}
+	log.Default().Info("Database migrations completed")
 
 	// Load the graph.
 	_, b, _, _ := runtime.Caller(0)

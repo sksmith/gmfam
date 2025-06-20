@@ -16,12 +16,27 @@ import (
 )
 
 func main() {
+	// Log startup information
+	log.Default().Info("Application starting",
+		"environment", os.Getenv("PAGODA_APP_ENVIRONMENT"),
+		"version", os.Getenv("APP_VERSION"),
+		"go_version", os.Getenv("GO_VERSION"),
+	)
+
 	// Start a new container.
 	c := services.NewContainer()
 	defer func() {
 		// Gracefully shutdown all services.
 		fatal("shutdown failed", c.Shutdown())
 	}()
+
+	// Log configuration details
+	log.Default().Info("Container initialized",
+		"app_environment", c.Config.App.Environment,
+		"http_hostname", c.Config.HTTP.Hostname,
+		"http_port", c.Config.HTTP.Port,
+		"database_type", "postgres",
+	)
 
 	// Build the router.
 	if err := handlers.BuildRouter(c); err != nil {
@@ -52,6 +67,11 @@ func main() {
 				Certificates: []tls.Certificate{certs},
 			}
 		}
+
+		log.Default().Info("Server starting",
+			"address", srv.Addr,
+			"tls_enabled", c.Config.HTTP.TLS.Enabled,
+		)
 
 		if err := c.Web.StartServer(&srv); errors.Is(err, http.ErrServerClosed) {
 			fatal("shutting down the server", err)

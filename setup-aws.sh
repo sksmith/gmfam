@@ -452,6 +452,8 @@ set_github_secrets() {
         ["ECR_REPOSITORY"]="$ecr_uri"
         ["LIGHTSAIL_SERVICE_NAME"]="$lightsail_service_name"
         ["PAGODA_DATABASE_CONNECTION"]="$db_connection"
+        ["PAGODA_DATABASE_DRIVER"]="postgres"
+        ["PAGODA_APP_ENVIRONMENT"]="prod"
         ["PAGODA_APP_HOST"]="$lightsail_url"
         ["PAGODA_APP_ENCRYPTIONKEY"]="$app_encryption_key"
         ["PAGODA_MAIL_HOSTNAME"]="localhost"
