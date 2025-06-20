@@ -63,6 +63,7 @@ jobs:
         role-to-assume: ${{ secrets.AWS_ARN_OIDC_ACCESS }}
         role-session-name: Github-${{ github.run_number }}
         aws-region: us-east-1
+        audience: sts.amazonaws.com
 
     - name: Set up Go
       uses: actions/setup-go@v4

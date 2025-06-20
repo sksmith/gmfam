@@ -490,6 +490,18 @@ set_github_secrets() {
     
     print_success "GitHub secrets configuration completed!"
     print_info "🔗 Manage secrets: https://github.com/$repo_full_name/settings/secrets/actions"
+    
+    # Validate critical secrets are set
+    print_info "Validating GitHub secrets..."
+    
+    critical_secrets=("AWS_ARN_OIDC_ACCESS" "LIGHTSAIL_HOST" "LIGHTSAIL_SSH_KEY")
+    for secret in "${critical_secrets[@]}"; do
+        if gh secret list --repo "$repo_full_name" | grep -q "^$secret"; then
+            print_success "✅ $secret is set"
+        else
+            print_error "❌ $secret is missing or not accessible"
+        fi
+    done
 }
 
 # Function to install AWS CLI
@@ -1070,6 +1082,35 @@ EOF
         print_error "Failed to get IAM role ARN"
         print_info "Error: $role_arn"
         exit 1
+    fi
+    
+    # Validate the setup
+    print_info "Validating GitHub OIDC setup..."
+    
+    # Check if OIDC provider exists and is accessible
+    if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$oidc_arn" >/dev/null 2>&1; then
+        print_success "✅ OIDC provider is accessible"
+    else
+        print_error "❌ OIDC provider is not accessible"
+        print_info "This will cause GitHub Actions authentication to fail"
+    fi
+    
+    # Check if role can be assumed (basic validation)
+    print_info "Verifying role trust policy..."
+    if trust_policy=$(aws iam get-role --role-name "$role_name" --query 'Role.AssumeRolePolicyDocument' --output json 2>&1); then
+        if echo "$trust_policy" | grep -q "token.actions.githubusercontent.com"; then
+            print_success "✅ Role trust policy includes GitHub OIDC"
+        else
+            print_warning "⚠️  Role trust policy may not include GitHub OIDC correctly"
+        fi
+        
+        if echo "$trust_policy" | grep -q "$github_username/$github_repo"; then
+            print_success "✅ Role trust policy includes your repository"
+        else
+            print_warning "⚠️  Role trust policy may not include your repository: $github_username/$github_repo"
+        fi
+    else
+        print_warning "⚠️  Could not verify role trust policy"
     fi
     
     # Clean up temporary files
