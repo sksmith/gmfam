@@ -778,8 +778,50 @@ create_database() {
     print_header "Creating Lightsail Database"
     
     local db_instance_id="${app_name}-db"
-    local db_blueprint="postgres_17"
-    local db_bundle="micro_2_0"  # Lightsail database bundle
+    
+    # Check available blueprints and bundles
+    print_info "Checking available Lightsail database blueprints..."
+    local available_blueprints=$(aws lightsail get-relational-database-blueprints --query 'blueprints[?contains(blueprintId, `postgres`)].blueprintId' --output text 2>/dev/null)
+    print_info "Available PostgreSQL blueprints: $available_blueprints"
+    
+    # Try to find PostgreSQL 17 blueprint
+    local db_blueprint=""
+    if echo "$available_blueprints" | grep -q "postgres_17"; then
+        db_blueprint="postgres_17"
+    elif echo "$available_blueprints" | grep -q "postgres-17"; then
+        db_blueprint="postgres-17"
+    elif echo "$available_blueprints" | grep -q "postgres_15"; then
+        db_blueprint="postgres_15"
+        print_warning "PostgreSQL 17 not found, using PostgreSQL 15"
+    else
+        print_error "No suitable PostgreSQL blueprint found"
+        print_info "Available blueprints: $available_blueprints"
+        exit 1
+    fi
+    
+    print_info "Using database blueprint: $db_blueprint"
+    
+    # Check available bundles
+    print_info "Checking available Lightsail database bundles..."
+    local available_bundles=$(aws lightsail get-relational-database-bundles --query 'bundles[?contains(bundleId, `micro`)].bundleId' --output text 2>/dev/null)
+    print_info "Available micro bundles: $available_bundles"
+    
+    # Try to find the right micro bundle
+    local db_bundle=""
+    if echo "$available_bundles" | grep -q "micro_2_0"; then
+        db_bundle="micro_2_0"
+    elif echo "$available_bundles" | grep -q "micro-2.0"; then
+        db_bundle="micro-2.0"
+    elif echo "$available_bundles" | grep -q "micro_1_0"; then
+        db_bundle="micro_1_0"
+        print_warning "micro_2_0 not found, using micro_1_0"
+    else
+        # Just use the first available micro bundle
+        db_bundle=$(echo "$available_bundles" | awk '{print $1}')
+        print_warning "Using first available micro bundle: $db_bundle"
+    fi
+    
+    print_info "Using database bundle: $db_bundle"
     
     # Check if Lightsail database already exists
     if aws lightsail get-relational-database --relational-database-name "$db_instance_id" >/dev/null 2>&1; then
@@ -831,9 +873,6 @@ create_database() {
             --master-database-name "$db_name" \
             --master-username "$db_username" \
             --master-user-password "$db_password" \
-            --backup-retention-enabled \
-            --preferred-backup-window "03:00-04:00" \
-            --preferred-maintenance-window "sun:04:00-sun:05:00" \
             --publicly-accessible \
             --tags key=Application,value=$app_name \
             >/dev/null 2>&1; then
@@ -883,9 +922,6 @@ create_database() {
                 --master-database-name "$db_name" \
                 --master-username "$db_username" \
                 --master-user-password "$db_password" \
-                --backup-retention-enabled \
-                --preferred-backup-window "03:00-04:00" \
-                --preferred-maintenance-window "sun:04:00-sun:05:00" \
                 --publicly-accessible \
                 --tags key=Application,value=$app_name 2>&1
             
