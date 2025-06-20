@@ -1329,15 +1329,20 @@ main() {
     install_aws_cli
     configure_aws
     collect_deployment_config
-    check_git
-    check_github_cli
-    setup_github_repository
+    
+    # Create all AWS infrastructure first
     create_database
     create_ecr_repository
     create_lightsail_container_service
     create_github_iam_role
     setup_production_config
+    
+    # Then set up GitHub repository and secrets
+    check_git
+    check_github_cli
+    setup_github_repository
     set_github_secrets
+    
     generate_summary
     
     print_success "Setup completed successfully! 🎉"

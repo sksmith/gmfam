@@ -1,0 +1,48 @@
+http:
+  hostname: ""
+  port: 8000
+  readTimeout: "5s"
+  writeTimeout: "10s"
+  idleTimeout: "2m"
+  shutdownTimeout: "10s"
+  tls:
+    enabled: false
+    certificate: ""
+    key: ""
+
+app:
+  name: "gmfam"
+  host: "http://:8000"
+  environment: "prod"
+  encryptionKey: "pb6aR531sxlL9A3K4E4EF3DOt4Oudxs9"
+  timeout: "20s"
+  passwordToken:
+      expiration: "60m"
+      length: 64
+  emailVerificationTokenExpiration: "12h"
+
+cache:
+  capacity: 100000
+  expiration:
+    publicFile: "4380h"
+
+database:
+  driver: "postgres"
+  connection: "postgres://dbuser:5r9eSPDctKK1QCMxNRNcJirOrXuEknq@gmfam-db.cezv0cuumplv.us-east-1.rds.amazonaws.com:5432/gmfam_prod?sslmode=require"
+  testConnection: "file:/?vfs=memdb&_timeout=1000&_fk=true"
+
+files:
+  directory: "uploads"
+
+tasks:
+  goroutines: 1
+  releaseAfter: "15m"
+  cleanupInterval: "1h"
+  shutdownTimeout: "10s"
+
+mail:
+  hostname: "localhost"
+  port: 25
+  user: "ssmith2347@gmail.com"
+  password: "admin"
+  fromAddress: "ssmith2347@gmail.com"
